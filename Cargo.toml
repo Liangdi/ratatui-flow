@@ -1,0 +1,11 @@
+[package]
+name = "tui-node-graph"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+tui = { version = "0.19", default-features = false }
+
+[dev-dependencies]
+crossterm = "*"
+tui = "0.19"
