@@ -1,6 +1,16 @@
 use tui::layout::Rect;
 use tui::buffer::Buffer;
 use tui::style::Style;
+use tui::widgets::{Block, Widget};
+
+#[derive(Default)]
+pub struct NodeLayout<'a> {
+	pub size: (u16, u16),
+	pub block: Option<Block<'a>>,
+}
+
+pub struct PortLayout {
+}
 
 pub struct NodeGraph<'a, T: NodeGraphTrait>(pub &'a T);
 
@@ -8,26 +18,18 @@ pub trait NodeGraphTrait {
 	/// Returns the number of nodes in the graph
 	fn node_count(&self) -> usize;
 
-	/// Returns an iterator over the connections from a requested node.
+	/// Returns an iterator over the connections to a requested node. Used for
+	/// layout.
 	///
 	/// Would love for this to return an iterator, but I couldn't figure out
 	/// how.
-	fn connections_from_node(&self, node: usize) -> Vec<Connection>;
-
-	/// Returns an iterator over the connections to a requested node.
-	///
-	/// See `connections_from_node`
 	fn connections_to_node(&self, node: usize) -> Vec<Connection>;
 
-	/// Returns the name of a node
-	fn node_name(&self, _node: usize) -> Option<&str> {
-		None
-	}
+	/// Returns a node's data
+	fn node(&self, _node: usize) -> NodeLayout;
 
-	/// Returns the name of a node's port
-	fn port_name(&self, _node: usize, _port: usize) -> Option<&str> {
-		None
-	}
+	/// Returns a port's data
+	fn port(&self, _node: usize, _port: usize, is_input: bool) -> PortLayout;
 }
 
 /*
@@ -55,23 +57,30 @@ impl<'a, T> tui::widgets::StatefulWidget for NodeGraph<'a, T>
 where
 	T: NodeGraphTrait,
 {
+	// eventually, this will contain stuff like view position
 //	type State = NodeGraphState;
 	type State = ();
 
 	fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
-		let mut row = area.y;
+		let mut block_position = area.y;
 		for idx_node in 0..self.0.node_count() {
-			let node_name = self.0.node_name(idx_node).unwrap_or("anonymous node");
-			buf.set_string(area.x, row, format!("{node_name:?}"), Style::default());
-			row += 1;
-			for ea_connection in self.0.connections_from_node(idx_node) {
-				buf.set_string(area.x + 4, row, format!("{ea_connection:?}"), Style::default());
-				row += 1;
+			let mut row = block_position;
+			let node = self.0.node(idx_node);
+			let (width, height) = node.size;
+			let block_area = Rect {
+				x: area.x,
+				y: row,
+				width, height,
+			};
+			if let Some(block) = node.block {
+				block.render(block_area, buf);
 			}
 			for ea_connection in self.0.connections_to_node(idx_node) {
-				buf.set_string(area.x + 4, row, format!("{ea_connection:?}"), Style::default());
+				buf.set_string(block_area.x + 1, row + 1, format!("{ea_connection:?}"), Style::default());
 				row += 1;
 			}
+			buf.set_string(block_area.x + 1, row + 1, format!("{block_area:?}"), Style::default());
+			block_position += height
 		}
 	}
 }

@@ -7,11 +7,11 @@ use crossterm::{
 };
 use std::{
 	io,
-	time::{Duration, Instant},
+	time::{Duration, Instant}, sync::atomic::ATOMIC_ISIZE_INIT,
 };
 use tui::{
 	backend::{Backend, CrosstermBackend},
-	Frame, Terminal,
+	Frame, Terminal, widgets::{BorderType, Block, Borders},
 };
 
 use tui_node_graph::*;
@@ -24,15 +24,25 @@ pub struct ExampleNodeGraph {
 
 impl NodeGraphTrait for ExampleNodeGraph {
 	fn node_count(&self) -> usize { self.nodes.len() }
-	fn connections_from_node(&self, idx: usize) -> Vec<Connection> {
-		self.connections.iter().filter(|ea| ea.from_node == idx).map(|ea| *ea).collect()
-	}
+
 	fn connections_to_node(&self, idx: usize) -> Vec<Connection> {
 		self.connections.iter().filter(|ea| ea.to_node == idx).map(|ea| *ea).collect()
 	}
 
-	fn node_name(&self, node: usize) -> Option<&str> {
-		self.nodes.get(node).map(|inner| inner.as_str())
+	fn node(&self, node: usize) -> NodeLayout {
+		let mut block = Block::default().border_type(BorderType::Double).borders(Borders::ALL);
+		if let Some(name) = self.nodes.get(node).map(|inner| inner.as_str()) {
+			block = block.title(name);
+		}
+		NodeLayout {
+			block: Some(block),
+			size: (40, 10),
+		}
+	}
+
+	fn port(&self, node: usize, port: usize, is_input: bool) -> PortLayout {
+		PortLayout {
+		}
 	}
 }
 
