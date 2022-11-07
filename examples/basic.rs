@@ -7,59 +7,21 @@ use crossterm::{
 };
 use std::{
 	io,
-	time::{Duration, Instant}, sync::atomic::ATOMIC_ISIZE_INIT,
+	time::{Duration, Instant},
 };
 use tui::{
 	backend::{Backend, CrosstermBackend},
-	Frame, Terminal, widgets::{BorderType, Block, Borders},
+	Frame, Terminal
 };
 
 use tui_node_graph::*;
 
-#[derive(Debug, Clone, Default)]
-pub struct ExampleNodeGraph {
-	nodes: Vec<String>,
-	connections: Vec<Connection>,
-}
-
-impl NodeGraphTrait for ExampleNodeGraph {
-	fn node_count(&self) -> usize { self.nodes.len() }
-
-	fn connections_to_node(&self, idx: usize) -> Vec<Connection> {
-		self.connections.iter().filter(|ea| ea.to_node == idx).map(|ea| *ea).collect()
-	}
-
-	fn node(&self, node: usize) -> NodeLayout {
-		let mut block = Block::default().border_type(BorderType::Double).borders(Borders::ALL);
-		if let Some(name) = self.nodes.get(node).map(|inner| inner.as_str()) {
-			block = block.title(name);
-		}
-		NodeLayout {
-			block: Some(block),
-			size: (40, 10),
-		}
-	}
-
-	fn port(&self, node: usize, port: usize, is_input: bool) -> PortLayout {
-		PortLayout {
-		}
-	}
-}
-
-struct App {
-	graph: ExampleNodeGraph,
-}
+struct App {}
 
 impl App {
-	fn new() -> Self {
-		Self {
-			graph: ExampleNodeGraph {
-				nodes: vec!["test".into(), "second".into(), "other".into()],
-				connections: vec![Connection::new(0,0,2,2)]
-			}
-		}
-	}
+	fn new() -> Self { Self {} }
 }
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// setup terminal
 	enable_raw_mode()?;
@@ -91,7 +53,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 fn run_app<B: Backend>(
 	terminal: &mut Terminal<B>,
-	mut app: App,
+	app: App,
 	tick_rate: Duration,
 ) -> io::Result<()> {
 	let mut last_tick = Instant::now();
@@ -114,7 +76,18 @@ fn run_app<B: Backend>(
 	}
 }
 
-fn ui<B: Backend>(f: &mut Frame<B>, app: &App) {
-    let space = f.size();
-    f.render_stateful_widget(NodeGraph(&app.graph), space, &mut ());
+fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
+	let space = f.size();
+	let mut graph = NodeGraph::new(
+		vec![
+			NodeLayout::new((40, 10)).with_title("test"),
+			NodeLayout::new((40, 10)).with_title("second"),
+			NodeLayout::new((40, 10)).with_title("other"),
+		],
+		vec![
+			Connection::new(0,0,2,2),
+		],
+	);
+	graph.calculate();
+	f.render_stateful_widget(graph, space, &mut ());
 }

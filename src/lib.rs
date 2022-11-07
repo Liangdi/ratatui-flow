@@ -1,35 +1,56 @@
 use tui::layout::Rect;
 use tui::buffer::Buffer;
 use tui::style::Style;
-use tui::widgets::{Block, Widget};
+use tui::widgets::{Block, Widget, BorderType, Borders};
 
 #[derive(Default)]
 pub struct NodeLayout<'a> {
-	pub size: (u16, u16),
-	pub block: Option<Block<'a>>,
+	size: (u16, u16),
+	block: Option<Block<'a>>,
+//	in_ports: Vec<PortLayout>,
+//	out_ports: Vec<PortLayout>,
 }
 
+impl<'a> NodeLayout<'a> {
+	pub fn new(size: (u16, u16)) -> Self {
+		Self {
+			size,
+			block: Some(Block::default().border_type(BorderType::Double).borders(Borders::ALL)),
+			..Self::default()
+		}
+	}
+
+	pub fn with_title(mut self, title: &'a str) -> Self {
+		self.block = Some(self.block.unwrap_or(Block::default()).title(title));
+		self
+	}
+}
+
+/*
 pub struct PortLayout {
 }
+*/
 
-pub struct NodeGraph<'a, T: NodeGraphTrait>(pub &'a T);
+#[derive(Default)]
+pub struct NodeGraph<'a>{
+	nodes: Vec<NodeLayout<'a>>,
+	connections: Vec<Connection>,
+}
 
-pub trait NodeGraphTrait {
-	/// Returns the number of nodes in the graph
-	fn node_count(&self) -> usize;
+impl<'a> NodeGraph<'a> {
+	pub fn new(
+		nodes: Vec<NodeLayout<'a>>,
+		connections: Vec<Connection>,
+	) -> Self {
+		Self {
+			nodes,
+			connections,
+			..Self::default()
+		}
+	}
 
-	/// Returns an iterator over the connections to a requested node. Used for
-	/// layout.
-	///
-	/// Would love for this to return an iterator, but I couldn't figure out
-	/// how.
-	fn connections_to_node(&self, node: usize) -> Vec<Connection>;
-
-	/// Returns a node's data
-	fn node(&self, _node: usize) -> NodeLayout;
-
-	/// Returns a port's data
-	fn port(&self, _node: usize, _port: usize, is_input: bool) -> PortLayout;
+	pub fn calculate(&mut self) {
+	}
 }
 
 /*
@@ -53,29 +74,25 @@ impl Connection {
 	}
 }
 
-impl<'a, T> tui::widgets::StatefulWidget for NodeGraph<'a, T>
-where
-	T: NodeGraphTrait,
-{
+impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
 	// eventually, this will contain stuff like view position
 //	type State = NodeGraphState;
 	type State = ();
 
 	fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
 		let mut block_position = area.y;
-		for idx_node in 0..self.0.node_count() {
+		for (idx_node, ea_node) in self.nodes.into_iter().enumerate() {
 			let mut row = block_position;
-			let node = self.0.node(idx_node);
-			let (width, height) = node.size;
+			let (width, height) = ea_node.size;
 			let block_area = Rect {
 				x: area.x,
 				y: row,
 				width, height,
 			};
-			if let Some(block) = node.block {
+			if let Some(block) = ea_node.block {
 				block.render(block_area, buf);
 			}
-			for ea_connection in self.0.connections_to_node(idx_node) {
+			for ea_connection in self.connections.iter().filter(|ea| ea.to_node == idx_node).copied() {
 				buf.set_string(block_area.x + 1, row + 1, format!("{ea_connection:?}"), Style::default());
 				row += 1;
 			}
