@@ -1,3 +1,6 @@
+#[macro_use] extern crate log;
+use simplelog as lg;
+
 // boilerplate from from tui-rs examples
 
 use crossterm::{
@@ -11,7 +14,7 @@ use std::{
 };
 use tui::{
 	backend::{Backend, CrosstermBackend},
-	Frame, Terminal
+	Frame, Terminal, widgets::Paragraph
 };
 
 use tui_node_graph::*;
@@ -23,6 +26,13 @@ impl App {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+	let mut log_config = lg::ConfigBuilder::new();
+	lg::WriteLogger::init(
+		lg::LevelFilter::Trace,
+		log_config.build(),
+		std::fs::File::create("basic.log").unwrap()
+	).unwrap();
+	info!(target: "log", "log started");
 	// setup terminal
 	enable_raw_mode()?;
 	let mut stdout = io::stdout();
@@ -80,14 +90,29 @@ fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
 	let space = f.size();
 	let mut graph = NodeGraph::new(
 		vec![
-			NodeLayout::new((40, 10)).with_title("test"),
-			NodeLayout::new((40, 10)).with_title("second"),
-			NodeLayout::new((40, 10)).with_title("other"),
+			NodeLayout::new((40, 10)).with_title("a|b|c"),
+			NodeLayout::new((40, 10)).with_title("b|c"),
+			NodeLayout::new((40, 10)).with_title("c"),
+			NodeLayout::new((40, 10)).with_title("d>c"),
+			NodeLayout::new((40, 10)).with_title("e|d"),
+			NodeLayout::new((30, 5)).with_title("f>(b,e)"),
+			NodeLayout::new((30, 5)).with_title("g|(a,f)"),
 		],
 		vec![
-			Connection::new(0,0,2,2),
+			Connection::new(0,0,1,0), // a | b
+			Connection::new(1,0,2,0), // b | c
+			Connection::new(3,0,2,1), // d > c
+			Connection::new(4,0,3,0), // e | d
+			Connection::new(5,0,1,0), // f > b
+			Connection::new(5,0,4,1), // f > e
+			Connection::new(6,0,0,0), // g | a
+			Connection::new(6,0,5,0), // g | f
 		],
 	);
 	graph.calculate();
+	let zones = graph.split(space);
+	for (idx, ea_zone) in zones.into_iter().enumerate() {
+		f.render_widget(Paragraph::new(format!("{idx}")), ea_zone);
+	}
 	f.render_stateful_widget(graph, space, &mut ());
 }
