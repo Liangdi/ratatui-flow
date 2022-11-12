@@ -140,7 +140,6 @@ impl<'a> NodeGraph<'a> {
 			// `layout.points` should be empty if `a_point` and `b_point` are the same
 			*placed_ou_conns.get_mut(&ea_conn.from_node).unwrap() += 1;
 			*placed_in_conns.get_mut(&ea_conn.to_node).unwrap() += 1;
-			// TODO find other points
 		}
 	}
 
@@ -201,8 +200,11 @@ impl<'a> NodeGraph<'a> {
 	pub fn split(&self, area: Rect) -> Vec<Rect> {
 		(0..self.nodes.len()).map(|idx_node| {
 			self.placements.get(&idx_node).map(|pos| {
+				if pos.right() > area.width || pos.bottom() > area.height {
+					return Rect { x: 0, y: 0, width: 0, height: 0, }
+				}
 				let mut pos = *pos;
-				pos.x = area.width.saturating_sub(pos.x + pos.width) + 1;
+				pos.x = area.width - pos.right() + 1;
 				pos.y += 1;
 				pos.width -= 2;
 				pos.height -= 2;
@@ -292,10 +294,11 @@ impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
 	type State = ();
 
 	fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
-		for (idx_node, ea_node) in self.nodes.into_iter().enumerate() {
+		'node: for (idx_node, ea_node) in self.nodes.into_iter().enumerate() {
 			if let Some(mut pos) = self.placements.get(&idx_node).copied() {
+				if pos.right() > area.width || pos.bottom() > area.height { continue 'node }
 				// draw box
-				pos.x = area.width.saturating_sub(pos.x + pos.width);
+				pos.x = area.width - pos.right();
 				let block = Block::default().border_type(ea_node.border).borders(Borders::ALL).title(ea_node.title);
 				block.render(pos, buf);
 				// draw connection ports
@@ -311,87 +314,84 @@ impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
 						.set_symbol(conn_symbol(false, ea_node.border, BorderType::Double));
 					row += 1;
 				}
-
-				// draw connections
-				for ea_conn in self.connections.iter() {
-					let layout = &self.conn_layout[&ea_conn];
-					let symbols = BorderType::line_symbols(layout.border);
-					let mut current_position = layout.start_pos;
-					let mut last_dir = Direction::East;
-					// XXX: this could probably be done a lot better, and it might be a good
-					// first issue?
-					use Direction::*;
-					for (ea_direction, ea_distance) in layout.points.iter() {
-						let corner = match (ea_direction, last_dir) {
-							(East,  East ) | (West,  West ) => symbols.horizontal,
-							(East,  West ) | (West,  East ) => unreachable!(),
-							(North, North) | (South, South) => symbols.vertical,
-							(North, South) | (South, North) => unreachable!(),
-							(East,  North) | (South, West ) => symbols.top_left,
-							(West,  North) | (South, East ) => symbols.top_right,
-							(East,  South) | (North, West ) => symbols.bottom_left,
-							(West,  South) | (North, East ) => symbols.bottom_right,
-						};
-						buf.get_mut(area.width - current_position.0, current_position.1)
-							.set_symbol(corner)
-							.set_style(layout.style);
-						match ea_direction {
-							Direction::East => {
-								for idx in 1..*ea_distance {
-									buf.get_mut(area.width - (current_position.0 - idx), current_position.1)
-										.set_symbol(symbols.horizontal)
-										.set_style(layout.style);
-								}
-								current_position.0 -= ea_distance;
-							}
-							Direction::West => {
-								for idx in 1..*ea_distance {
-									buf.get_mut(area.width - (current_position.0 + idx), current_position.1)
-										.set_symbol(symbols.horizontal)
-										.set_style(layout.style);
-								}
-								current_position.0 += ea_distance;
-							}
-							Direction::North => {
-								for idx in 1..*ea_distance {
-									buf.get_mut(area.width - current_position.0, current_position.1 - idx)
-										.set_symbol(symbols.vertical)
-										.set_style(layout.style);
-								}
-								current_position.1 -= ea_distance;
-							}
-							Direction::South => {
-								for idx in 1..*ea_distance {
-									buf.get_mut(area.width - current_position.0, current_position.1 + idx)
-										.set_symbol(symbols.vertical)
-										.set_style(layout.style);
-								}
-				            current_position.1 += ea_distance;
-							}
-						}
-						last_dir = *ea_direction;
-					}
-					let corner = match last_dir {
-						East  => symbols.horizontal,
-						West  => unreachable!(),
-						North => symbols.top_left,
-						South => symbols.bottom_left,
-					};
-					buf.get_mut(area.width - current_position.0, current_position.1)
-						.set_symbol(corner)
-						.set_style(layout.style);
-				}
 			}
 			else {
 				buf.set_string(0, idx_node as u16, format!("{idx_node}"), Style::default());
 			}
-			/*
-			for ea_connection in self.connections.iter().filter(|ea| ea.to_node == idx_node).copied() {
-				buf.set_string(block_area.x + 1, row + 1, format!("{ea_connection:?}"), Style::default());
-				row += 1;
+		}
+
+		// draw connections
+		'conn: for ea_conn in self.connections.iter() {
+			let layout = &self.conn_layout[&ea_conn];
+			let symbols = BorderType::line_symbols(layout.border);
+			let mut current_position = layout.start_pos;
+			let mut last_dir = Direction::East;
+			use Direction::*;
+			for (ea_direction, ea_distance) in layout.points.iter() {
+				let corner = match (ea_direction, last_dir) {
+					(East,  East ) | (West,  West ) => symbols.horizontal,
+					(East,  West ) | (West,  East ) => unreachable!(),
+					(North, North) | (South, South) => symbols.vertical,
+					(North, South) | (South, North) => unreachable!(),
+					(East,  North) | (South, West ) => symbols.top_left,
+					(West,  North) | (South, East ) => symbols.top_right,
+					(East,  South) | (North, West ) => symbols.bottom_left,
+					(West,  South) | (North, East ) => symbols.bottom_right,
+				};
+				if current_position.0 > area.width || current_position.1 >= area.bottom() { continue 'conn }
+				buf.get_mut(area.width - current_position.0, current_position.1)
+					.set_symbol(corner)
+					.set_style(layout.style);
+				match ea_direction {
+					Direction::East => {
+						for idx in 1..*ea_distance {
+							if current_position.0 - idx > area.width || current_position.1 >= area.bottom() { continue 'conn }
+							buf.get_mut(area.width - (current_position.0 - idx), current_position.1)
+								.set_symbol(symbols.horizontal)
+								.set_style(layout.style);
+						}
+						current_position.0 -= ea_distance;
+					}
+					Direction::West => {
+						for idx in 1..*ea_distance {
+							if current_position.0 + idx > area.width || current_position.1 >= area.bottom() { continue 'conn }
+							buf.get_mut(area.width - (current_position.0 + idx), current_position.1)
+								.set_symbol(symbols.horizontal)
+								.set_style(layout.style);
+						}
+						current_position.0 += ea_distance;
+					}
+					Direction::North => {
+						for idx in 1..*ea_distance {
+							if current_position.0 > area.width || current_position.1 - idx >= area.bottom() { continue 'conn }
+							buf.get_mut(area.width - current_position.0, current_position.1 - idx)
+								.set_symbol(symbols.vertical)
+								.set_style(layout.style);
+						}
+						current_position.1 -= ea_distance;
+					}
+					Direction::South => {
+						for idx in 1..*ea_distance {
+							if current_position.0 > area.width || current_position.1 + idx >= area.bottom() { continue 'conn }
+							buf.get_mut(area.width - current_position.0, current_position.1 + idx)
+								.set_symbol(symbols.vertical)
+								.set_style(layout.style);
+						}
+		            current_position.1 += ea_distance;
+					}
+				}
+				last_dir = *ea_direction;
 			}
-			buf.set_string(block_area.x + 1, row + 1, format!("{block_area:?}"), Style::default());
-			*/
+			if current_position.0 > area.width || current_position.1 >= area.bottom() { continue 'conn }
+			let corner = match last_dir {
+				East  => symbols.horizontal,
+				West  => unreachable!(),
+				North => symbols.top_left,
+				South => symbols.bottom_left,
+			};
+			buf.get_mut(area.width - current_position.0, current_position.1)
+				.set_symbol(corner)
+				.set_style(layout.style);
 		}
 	}
 }
