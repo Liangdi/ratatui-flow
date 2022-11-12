@@ -174,11 +174,11 @@ impl<'a> NodeGraph<'a> {
 		for ea_child in get_upstream(&self.connections, idx_node) {
 			if self.placements.contains_key(&ea_child) {
 				// nudge it (if necessary)
-				self.nudge(ea_child, rect_me.x + rect_me.width + 1);
+				self.nudge(ea_child, rect_me.x + rect_me.width + 3);
 			}
 			else {
 				// place it
-				self.place_node(ea_child, x + rect_me.width + 1, y, main_chain);
+				self.place_node(ea_child, x + rect_me.width + 3, y, main_chain);
 				main_chain.clear();
 				y += self.placements[&ea_child].height;
 			}
@@ -192,7 +192,7 @@ impl<'a> NodeGraph<'a> {
 			self.placements.get_mut(&idx_node).unwrap().x = x;
 			for ea_child in get_upstream(&self.connections, idx_node) {
 				assert!(self.placements.contains_key(&ea_child));
-				self.nudge(ea_child, x + rect_me.width + 1);
+				self.nudge(ea_child, x + rect_me.width + 3);
 			}
 		}
 	}
