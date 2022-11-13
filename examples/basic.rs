@@ -1,6 +1,3 @@
-#[macro_use] extern crate log;
-use simplelog as lg;
-
 // boilerplate from from tui-rs examples
 
 use crossterm::{
@@ -26,13 +23,6 @@ impl App {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-	let mut log_config = lg::ConfigBuilder::new();
-	lg::WriteLogger::init(
-		lg::LevelFilter::Trace,
-		log_config.build(),
-		std::fs::File::create("basic.log").unwrap()
-	).unwrap();
-	info!(target: "log", "log started");
 	// setup terminal
 	enable_raw_mode()?;
 	let mut stdout = io::stdout();

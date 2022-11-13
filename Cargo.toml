@@ -5,9 +5,7 @@ edition = "2021"
 
 [dependencies]
 tui = { version = "0.19", default-features = false }
-log = "*"
+log = "0.4.17"
 
 [dev-dependencies]
-simplelog = "*"
-crossterm = "*"
-tui = "0.19"
+crossterm = "0.25"
