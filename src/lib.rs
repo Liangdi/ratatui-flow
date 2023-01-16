@@ -24,7 +24,7 @@ impl<'a> NodeLayout<'a> {
 	pub fn new(size: (u16, u16)) -> Self {
 		Self {
 			size,
-			border: BorderType::Rounded,
+			border: BorderType::Double,
 			title: "",
 		}
 	}
@@ -261,7 +261,7 @@ impl ConnectionLayout {
 		Self {
 			start_pos,
 			points: Vec::new(),
-			border: BorderType::Double,
+			border: BorderType::Rounded,
 			style: Style::default(),
 		}
 	}
@@ -296,7 +296,6 @@ impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
 	type State = ();
 
 	fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
-		assert!(self.alias_connections.len() == 2);
 		// draw connections
 		'conn: for ea_layout in self.conn_layout.values() {
 			let symbols = BorderType::line_symbols(ea_layout.border);

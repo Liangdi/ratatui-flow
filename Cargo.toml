@@ -1,12 +1,12 @@
 [package]
 name = "tui-nodes"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["jaxter184 <jaxter184@gmail.com>"]
 description = """
 Node graph visualization for tui-rs
 """
-documentation = "https://docs.rs/tui-nodes/0.19.0/tui-nodes/"
+documentation = "https://docs.rs/tui-nodes/0.1.1/tui-nodes/"
 keywords = ["tui", "terminal"]
 repository = "https://git.sr.ht/~jaxter184/tui-nodes"
 readme = "README.md"
@@ -17,4 +17,5 @@ tui = { version = "0.19", default-features = false }
 log = "0.4.17"
 
 [dev-dependencies]
+tui = { version = "0.19", features = ["crossterm"] }
 crossterm = "0.25"

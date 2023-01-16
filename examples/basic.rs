@@ -14,7 +14,7 @@ use tui::{
 	Frame, Terminal, widgets::Paragraph
 };
 
-use tui_node_graph::*;
+use tui_nodes::*;
 
 struct App {}
 
