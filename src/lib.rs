@@ -11,6 +11,7 @@ use tui::{
 	widgets::{Block, Widget, BorderType, Borders},
 };
 
+#[derive(Debug)]
 pub struct NodeLayout<'a> {
 	// minimum size of contents (TODO: doc: including borders?)
 	size: (u16, u16),
@@ -40,7 +41,7 @@ pub struct PortLayout {
 }
 */
 
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub struct NodeGraph<'a> {
 	nodes: Vec<NodeLayout<'a>>,
 	connections: Vec<Connection>,
@@ -162,17 +163,22 @@ impl<'a> NodeGraph<'a> {
 		// main chain (largest subset of nodes including this one where every
 		// node is the first child of its parent) should be moved down to not
 		// intersect.
-		let mut bottom = y;
-		for (_, ea_them) in self.placements.iter() {
-			if rect_me.intersects(*ea_them) {
-				bottom = bottom.max(ea_them.bottom());
+		//
+		// Repeat the for loop until in runs all the way through without any
+		// intersections. Surely there's a more efficient way to do this.
+		'outer: loop {
+			for (_, ea_them) in self.placements.iter() {
+				if rect_me.intersects(*ea_them) {
+					rect_me.y = rect_me.y.max(ea_them.bottom());
+					continue 'outer
+				}
 			}
+			break
 		}
 		for ea_node in main_chain.iter() {
-			let y = self.placements[ea_node].y.max(bottom);
+			let y = self.placements[ea_node].y.max(rect_me.y);
 			self.placements.get_mut(ea_node).unwrap().y = y;
 		}
-		rect_me.y = bottom;
 		self.placements.insert(idx_node, rect_me);
 
 		// find children and order them
