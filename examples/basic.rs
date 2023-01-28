@@ -1,14 +1,5 @@
 // boilerplate from from tui-rs examples
 
-use crossterm::{
-	event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode},
-	execute,
-	terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use std::{
-	io,
-	time::{Duration, Instant},
-};
 use tui::{
 	backend::{Backend, CrosstermBackend},
 	Frame, Terminal, widgets::Paragraph
@@ -23,57 +14,17 @@ impl App {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+	print!("\x1b[2J\x1b[1;1H");
 	// setup terminal
-	enable_raw_mode()?;
-	let mut stdout = io::stdout();
-	execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
+	let stdout = std::io::stdout();
 	let backend = CrosstermBackend::new(stdout);
 	let mut terminal = Terminal::new(backend)?;
 
 	// create app and run it
-	let tick_rate = Duration::from_millis(250);
 	let app = App::new();
-	let res = run_app(&mut terminal, app, tick_rate);
-
-	// restore terminal
-	disable_raw_mode()?;
-	execute!(
-		terminal.backend_mut(),
-		LeaveAlternateScreen,
-		DisableMouseCapture
-	)?;
-	terminal.show_cursor()?;
-
-	if let Err(err) = res {
-		println!("{:?}", err)
-	}
+	terminal.draw(|f| ui(f, &app))?;
 
 	Ok(())
-}
-
-fn run_app<B: Backend>(
-	terminal: &mut Terminal<B>,
-	app: App,
-	tick_rate: Duration,
-) -> io::Result<()> {
-	let mut last_tick = Instant::now();
-	loop {
-		terminal.draw(|f| ui(f, &app))?;
-
-		let timeout = tick_rate
-			.checked_sub(last_tick.elapsed())
-			.unwrap_or_else(|| Duration::from_secs(0));
-		if crossterm::event::poll(timeout)? {
-			if let Event::Key(key) = event::read()? {
-				if let KeyCode::Char('q') = key.code {
-					return Ok(());
-				}
-			}
-		}
-		if last_tick.elapsed() >= tick_rate {
-			last_tick = Instant::now();
-		}
-	}
 }
 
 fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
@@ -93,11 +44,13 @@ fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
 			Connection::new(1,0,2,0), // b | c
 			Connection::new(3,0,2,1), // d > c
 			Connection::new(4,0,3,0), // e | d
-			Connection::new(5,0,1,0), // f > b
+			Connection::new(5,0,1,1), // f > b
 			Connection::new(5,0,4,6), // f > e
 			Connection::new(6,0,0,0), // g | a
 			Connection::new(6,0,5,0), // g | f
 		],
+		space.width as usize,
+		space.height as usize,
 	);
 	graph.calculate();
 	let zones = graph.split(space);

@@ -1,24 +1,31 @@
 use super::*;
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct NodeGraph<'a> {
 	nodes: Vec<NodeLayout<'a>>,
 	connections: Vec<Connection>,
 	placements: Map<usize, Rect>,
-	conn_layout: Map<Connection, ConnectionLayout>,
+	pub conn_layout: ConnectionsLayout,
+//	conn_layout: Map<Connection, ConnectionLayout>,
 	/// <(is_input, x, y), rendered_char>
 	alias_connections: Map<(bool, usize, usize), &'static str>,
+	width: usize,
 }
 
 impl<'a> NodeGraph<'a> {
 	pub fn new(
 		nodes: Vec<NodeLayout<'a>>,
 		connections: Vec<Connection>,
+		width: usize,
+		height: usize,
 	) -> Self {
 		Self {
 			nodes,
 			connections,
-			..Self::default()
+			conn_layout: ConnectionsLayout::new(width, height),
+			placements: Default::default(),
+			alias_connections: Default::default(),
+			width,
 		}
 	}
 
@@ -42,6 +49,27 @@ impl<'a> NodeGraph<'a> {
 		// placement, but thats really complicated and i dont wanna deal with that
 		// right now. essentially, adding non-trivial connections nudges nodes,
 		// and nudging nodes nudges existing connections.)
+		let mut conn_map = Map::<(usize, usize), usize>::new();
+		let mut next_idx = 1;
+		for ea_conn in self.connections.iter() {
+			let a_pos = self.placements[&ea_conn.from_node];
+			let b_pos = self.placements[&ea_conn.to_node];
+			// NOTE: don't forget that left and right are swapped
+			let a_point = (self.width - a_pos.left() as usize, a_pos.top() as usize + ea_conn.from_port + 1);
+			let b_point = (self.width - b_pos.right() as usize - 1, b_pos.top() as usize + ea_conn.to_port + 1);
+			self.conn_layout.insert_port(false, ea_conn.from_node, ea_conn.from_port, a_point);
+			self.conn_layout.insert_port(true,  ea_conn.to_node,   ea_conn.to_port,   b_point);
+			let key = (ea_conn.from_node, ea_conn.from_port);
+			if !conn_map.contains_key(&key) {
+				conn_map.insert(key, next_idx);
+				next_idx += 1;
+			}
+			self.conn_layout.push_connection((*ea_conn, conn_map[&key]));
+		}
+		self.conn_layout.calculate();
+
+		/*
+      // old connection algorithm
 		self.connections.sort_by(|a,b| {
 			match a.from_node.cmp(&b.from_node) {
 				std::cmp::Ordering::Equal => a.from_port.cmp(&b.from_node),
@@ -109,6 +137,7 @@ impl<'a> NodeGraph<'a> {
 			}
 			// `layout.points` should be empty if `a_point` and `b_point` are the same
 		}
+		*/
 	}
 
 	/// ATTENTION: x_offs works in the opposite direction (higher values are
@@ -212,6 +241,8 @@ impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
 	type State = ();
 
 	fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
+		self.conn_layout.render(area, buf);
+		/*
 		// draw connections
 		'conn: for ea_layout in self.conn_layout.values() {
 			let symbols = BorderType::line_symbols(ea_layout.border());
@@ -284,6 +315,7 @@ impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
 				.set_symbol(corner)
 				.set_style(ea_layout.style());
 		}
+		*/
 
 		// draw nodes
 		'node: for (idx_node, ea_node) in self.nodes.into_iter().enumerate() {
