@@ -1,5 +1,7 @@
 use std::collections::BTreeMap as Map;
-use tui::{widgets::BorderType, buffer::Buffer, layout::Rect};
+use tui::{widgets::BorderType, buffer::Buffer, layout::Rect, symbols::line};
+
+const SEARCH_TIMEOUT: usize = 5000;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Direction {
@@ -47,17 +49,30 @@ impl std::fmt::Debug for Direction {
 	}
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy)]
 pub struct Connection {
 	pub from_node: usize,
 	pub from_port: usize,
 	pub to_node: usize,
 	pub to_port: usize,
+	border_type: BorderType,
 }
 
 impl Connection {
 	pub fn new(from_node: usize, from_port: usize, to_node: usize, to_port: usize) -> Self {
-		Self { from_node, from_port, to_node, to_port, }
+		Self {
+			from_node, from_port, to_node, to_port,
+			border_type: BorderType::Rounded,
+		}
+	}
+
+	pub fn with_border_type(mut self, border_type: BorderType) -> Self {
+		self.border_type = border_type;
+		self
+	}
+
+	pub fn border_type(&self) -> BorderType {
+		self.border_type
 	}
 }
 
@@ -73,11 +88,11 @@ pub fn conn_symbol(is_input: bool, block_style: BorderType, conn_style: BorderTy
 		                    | BorderType::Rounded) => ("┤", "├"),
 
 		(BorderType::Thick,   BorderType::Thick)   => ("┫", "┣"),
-		(BorderType::Thick,   BorderType::Double)  => ("X", "X"),
+		(BorderType::Thick,   BorderType::Double)  => ("╡", "╞"), // fallback
 		(BorderType::Thick,   BorderType::Plain
 		                    | BorderType::Rounded) => ("┨", "┠"),
 
-		(BorderType::Double,  BorderType::Thick)   => ("X", "X"),
+		(BorderType::Double,  BorderType::Thick)   => ("╢", "╟"), // fallback
 		(BorderType::Double,  BorderType::Double)  => ("╣", "╠"),
 		(BorderType::Double,  BorderType::Plain
 		                    | BorderType::Rounded) => ("╢", "╟"),
@@ -107,6 +122,7 @@ pub struct ConnectionsLayout {
 	width: usize,
 	height: usize,
 	pub alias_connections: Map<(bool, usize, usize), &'static str>,
+	border_types: Map<usize, BorderType>,
 }
 
 impl ConnectionsLayout {
@@ -118,6 +134,7 @@ impl ConnectionsLayout {
 			width,
 			height,
 			alias_connections: Map::new(),
+			border_types: Map::new(),
 		}
 	}
 
@@ -150,8 +167,9 @@ impl ConnectionsLayout {
 	pub fn calculate(&mut self) {
 		let mut idx_next_alias = 0;
 		'outer: for ea_conn in &self.connections {
-			let start = (self.ports[&(false, ea_conn.0.from_node, ea_conn.0.from_port)], Direction::East);
-			let goal  = (self.ports[&(true, ea_conn.0.to_node, ea_conn.0.to_port)],      Direction::West);
+			self.border_types.insert(ea_conn.1, ea_conn.0.border_type());
+			let start = (self.ports[&(false, ea_conn.0.from_node, ea_conn.0.from_port)], Direction::West);
+			let goal  = (self.ports[&(true, ea_conn.0.to_node, ea_conn.0.to_port)],      Direction::East);
 			if start.0.0 > self.edge_field.width || start.0.1 > self.edge_field.height {
 				continue
 			}
@@ -163,7 +181,12 @@ impl ConnectionsLayout {
 			let mut came_from = Betweens::<Option<_>>::new(self.width, self.height);
 			let mut cost      = Betweens::<isize>::new(self.width, self.height);
 			frontier.push(((0, 0), start));
+			let mut count = 0;
 			while let Some((_, current)) = frontier.pop() {
+				count += 1;
+				if count > SEARCH_TIMEOUT {
+					break
+				}
 				if current == goal {
 					break
 				}
@@ -205,11 +228,10 @@ impl ConnectionsLayout {
 				std::io::stdin().read_line(&mut String::new()).unwrap();
 				*/
 			}
-			// TODO: mark connections that didnt reach the goal
+			// first pass: mark connections that didnt reach the goal
 			let mut next = goal;
 			loop {
 				if next == start { break }
-				self.edge_field[next.into()] = Edge::Connection(ea_conn.1);
 				if let Some(from) = came_from[next.into()] {
 					next = from;
 				}
@@ -221,16 +243,45 @@ impl ConnectionsLayout {
 					}
 					let alias = self.alias_connections[&(false, ea_conn.0.from_node, ea_conn.0.from_port)];
 					self.alias_connections.insert((true, ea_conn.0.to_node, ea_conn.0.to_port), alias);
-					println!("couldnt connect {start:?} to {goal:?}");
+				//	println!("couldnt connect {start:?} to {goal:?}");
 					continue 'outer
 				}
+			}
+
+			// second pass: draw edges
+			let mut next = goal;
+			loop {
+				if next == start { break }
+				self.edge_field[next.into()] = Edge::Connection(ea_conn.1);
+				next = came_from[next.into()].unwrap();
 			}
 		}
 	}
 
 	pub fn render(&self, buf: &mut Buffer) {
-		let sym = BorderType::line_symbols(BorderType::Plain);
-
+		let bor = |idx: Edge| -> line::Set {
+			if let Edge::Connection(idx) = idx {
+				BorderType::line_symbols(self.border_types[&idx])
+			}
+			else if idx == Edge::Blocked {
+				line::THICK
+			}
+			else {
+				line::Set {
+					vertical: " ",
+					horizontal: " ",
+					top_right: " ",
+					top_left: " ",
+					bottom_right: " ",
+					bottom_left: " ",
+					vertical_left: " ",
+					vertical_right: " ",
+					horizontal_down: " ",
+					horizontal_up: " ",
+					cross: " ",
+				}
+			}
+		};
 	//	for ea_conn in self.connections.iter() { println!("{ea_conn:?}"); }
 	//	for ea_port in self.ports.iter() { println!("{ea_port:?}"); }
 	//	self.edge_field.print_with(1, |ea| print!("{:>1} ", ea));
@@ -246,33 +297,35 @@ impl ConnectionsLayout {
 				let symbol = match (north, south, east, west) {
 					(B | E, B | E, B | E, B | E) => continue,
 					(n, s, e, w) if n == B || s == B || e == B || w == B => {
-						if n == B && s == B && e != E || w != E {
-							sym.horizontal
+						if n == B && s == B && e != E || w != E && e == w {
+							bor(e).horizontal
 						}
-						else if e == B && w == B && n != E && s != E {
-							sym.vertical
+						else if e == B && w == B && n != E && s != E && n == s {
+							bor(n).vertical
 						}
 						else {
-							continue
+							"*"
 						}
 					},
-					(n, s, e, w) if n == s && n == e && n == w => sym.cross,
-					(n, s, e, w) if n == s && e == w && n != E && e != E => sym.vertical, // intersections should just be verticals
-					(n, s, E, w) if n == s && n == w => sym.vertical_left,
-					(n, E, e, w) if n == e && n == w => sym.horizontal_up,
-					(n, s, e, E) if n == s && n == e => sym.vertical_right,
-					(E, s, e, w) if s == e && s == w => sym.horizontal_down,
-					(n, s, E, E) if n == s => sym.vertical,
-					(E, E, e, w) if e == w => sym.horizontal,
-					(E, s, E, w) if s == w => sym.top_right,
-					(n, E, E, w) if n == w => sym.bottom_right,
-					(n, E, e, E) if n == e => sym.bottom_left,
-					(E, s, e, E) if s == e => sym.top_left,
+					(n, E, E, E) => bor(n).vertical,
+					(E, s, E, E) => bor(s).vertical,
+					(E, E, e, E) => bor(e).horizontal,
+					(E, E, E, w) => bor(w).horizontal,
 
-					(_, E, E, E) => sym.vertical,
-					(E, _, E, E) => sym.vertical,
-					(E, E, _, E) => sym.horizontal,
-					(E, E, E, _) => sym.horizontal,
+					(n, s, E, w) if n == s && n == w => bor(n).vertical_left,
+					(n, E, e, w) if n == e && n == w => bor(n).horizontal_up,
+					(n, s, e, E) if n == s && n == e => bor(n).vertical_right,
+					(E, s, e, w) if s == e && s == w => bor(s).horizontal_down,
+					(E, s, E, w) if s == w => bor(s).top_right,
+					(n, E, E, w) if n == w => bor(n).bottom_right,
+					(n, E, e, E) if n == e => bor(n).bottom_left,
+					(E, s, e, E) if s == e => bor(s).top_left,
+
+					(n, s, E, E) if n == s => bor(n).vertical,
+					(E, E, e, w) if e == w => bor(e).horizontal,
+
+					(n, s, e, w) if n == s && n == e && n == w => bor(n).cross,
+					(n, s, e, w) if n == s && e == w && n != E && e != E => bor(n).vertical, // intersections should just be verticals
 					(_, _, _, _) => "?",//unreachable!("{n} {s} {e} {w}"),
 				};
 				buf.get_mut(x as u16, y as u16)
@@ -363,7 +416,11 @@ fn neighbors(pos: (usize, usize), width: usize, height: usize) -> Vec<((usize, u
 use core::ops::{Index, IndexMut};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct EdgeIdx(usize, usize, bool);
+struct EdgeIdx {
+	x: usize,
+	y: usize,
+	is_vertical: bool,
+}
 /*
 impl EdgeIdx {
 	fn pos(self) -> (usize, usize) {
@@ -374,10 +431,10 @@ impl EdgeIdx {
 impl From<((usize, usize), Direction)> for EdgeIdx {
 	fn from(value: ((usize, usize), Direction)) -> Self {
 		match value.1 {
-			Direction::North => Self(value.0.0,   value.0.1,   true),
-			Direction::South => Self(value.0.0,   value.0.1+1, true),
-			Direction::East  => Self(value.0.0+1, value.0.1,  false),
-			Direction::West  => Self(value.0.0,   value.0.1,  false),
+			Direction::North => Self { x: value.0.0,   y: value.0.1,   is_vertical: true  },
+			Direction::South => Self { x: value.0.0,   y: value.0.1+1, is_vertical: true  },
+			Direction::East  => Self { x: value.0.0+1, y: value.0.1,   is_vertical: false },
+			Direction::West  => Self { x: value.0.0,   y: value.0.1,   is_vertical: false },
 		}
 	}
 }
@@ -393,14 +450,14 @@ struct Betweens<T: Default> {
 impl<T: Default> Index<EdgeIdx> for Betweens<T> {
 	type Output = T;
 	fn index(&self, index: EdgeIdx) -> &Self::Output {
-		if index.2 { &self.vertical[index.1][index.0] }
-		else       { &self.horizontal[index.1][index.0] }
+		if index.is_vertical { &self.vertical  [index.y][index.x] }
+		else                 { &self.horizontal[index.y][index.x] }
 	}
 }
 impl<T: Default> IndexMut<EdgeIdx> for Betweens<T> {
 	fn index_mut(&mut self, index: EdgeIdx) -> &mut T {
-		if index.2 { &mut self.vertical[index.1][index.0] }
-		else       { &mut self.horizontal[index.1][index.0] }
+		if index.is_vertical { &mut self.vertical  [index.y][index.x] }
+		else                 { &mut self.horizontal[index.y][index.x] }
 	}
 }
 

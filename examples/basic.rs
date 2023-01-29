@@ -2,7 +2,7 @@
 
 use tui::{
 	backend::{Backend, CrosstermBackend},
-	Frame, Terminal, widgets::Paragraph
+	Frame, Terminal, widgets::{Paragraph, BorderType}
 };
 
 use tui_nodes::*;
@@ -31,24 +31,24 @@ fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
 	let space = f.size();
 	let mut graph = NodeGraph::new(
 		vec![
-			NodeLayout::new((40, 10)).with_title("a|b|c"),
-			NodeLayout::new((40, 10)).with_title("b|c"),
-			NodeLayout::new((40, 10)).with_title("c"),
-			NodeLayout::new((40, 10)).with_title("d>c"),
-			NodeLayout::new((40, 10)).with_title("e|d"),
-			NodeLayout::new((30, 5)).with_title("f>(b,e)"),
-			NodeLayout::new((30, 5)).with_title("g|(a,f)"),
+			NodeLayout::new((40, 10)).with_title("a|b|c").with_border_type(BorderType::Thick),
+			NodeLayout::new((40, 10)).with_title("b|c").with_border_type(BorderType::Thick),
+			NodeLayout::new((40, 10)).with_title("c").with_border_type(BorderType::Rounded),
+			NodeLayout::new((40, 10)).with_title("d>c").with_border_type(BorderType::Thick),
+			NodeLayout::new((40, 10)).with_title("e|d").with_border_type(BorderType::Double),
+			NodeLayout::new((30, 5)).with_title("f>(b,e)").with_border_type(BorderType::Thick),
+			NodeLayout::new((30, 5)).with_title("g|(a,f)").with_border_type(BorderType::Double),
 		],
 		vec![
-			Connection::new(0,0,1,0), // a | b
-			Connection::new(1,0,2,0), // b | c
-			Connection::new(3,0,2,1), // d > c
+			Connection::new(0,0,1,0).with_border_type(BorderType::Double), // a | b
+			Connection::new(1,0,2,0).with_border_type(BorderType::Thick), // b | c
+			Connection::new(3,0,2,1).with_border_type(BorderType::Double), // d > c
 			Connection::new(4,0,3,0), // e | d
 			Connection::new(4,0,0,1), // e | d
 			Connection::new(5,0,1,1), // f > b
 			Connection::new(5,0,4,6), // f > e
-			Connection::new(6,0,0,0), // g | a
-			Connection::new(6,0,5,0), // g | f
+			Connection::new(6,0,0,0).with_border_type(BorderType::Double), // g | a
+			Connection::new(6,0,5,0).with_border_type(BorderType::Double), // g | f
 		],
 		space.width as usize,
 		space.height as usize,

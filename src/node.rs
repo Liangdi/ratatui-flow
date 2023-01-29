@@ -1,12 +1,13 @@
-use tui::widgets::BorderType;
+use tui::{widgets::{BorderType, Block, Borders}, style::Style};
 
 /// Render information for a single node
 #[derive(Debug)]
 pub struct NodeLayout<'a> {
 	// minimum size of contents (TODO: doc: including borders?)
 	pub size: (u16, u16),
-	pub border: BorderType,
+	border_type: BorderType,
 	title: &'a str,
+	border_style: Style,
 //	in_ports: Vec<PortLayout>,
 //	out_ports: Vec<PortLayout>,
 }
@@ -15,8 +16,9 @@ impl<'a> NodeLayout<'a> {
 	pub fn new(size: (u16, u16)) -> Self {
 		Self {
 			size,
-			border: BorderType::Double,
+			border_type: BorderType::Plain,
 			title: "",
+			border_style: Style::default(),
 		}
 	}
 
@@ -27,5 +29,27 @@ impl<'a> NodeLayout<'a> {
 
 	pub fn title(&self) -> &str {
 		self.title
+	}
+
+	pub fn with_border_type(mut self, border: BorderType) -> Self {
+		self.border_type = border;
+		self
+	}
+
+	pub fn border_type(&self) -> BorderType {
+		self.border_type
+	}
+
+	pub fn with_border_style(mut self, style: Style) -> Self{
+		self.border_style = style;
+		self
+	}
+
+	pub fn block(&self) -> Block {
+		Block::default()
+			.borders(Borders::ALL)
+			.border_type(self.border_type)
+			.border_style(self.border_style)
+			.title(self.title)
 	}
 }

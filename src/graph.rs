@@ -55,8 +55,8 @@ impl<'a> NodeGraph<'a> {
 			let a_pos = self.placements[&ea_conn.from_node];
 			let b_pos = self.placements[&ea_conn.to_node];
 			// NOTE: don't forget that left and right are swapped
-			let a_point = (self.width - a_pos.left() as usize, a_pos.top() as usize + ea_conn.from_port + 1);
-			let b_point = (self.width - b_pos.right() as usize - 1, b_pos.top() as usize + ea_conn.to_port + 1);
+			let a_point = (self.width.saturating_sub(a_pos.left().into()), a_pos.top() as usize + ea_conn.from_port + 1);
+			let b_point = (self.width.saturating_sub(b_pos.right() as usize + 1), b_pos.top() as usize + ea_conn.to_port + 1);
 			self.conn_layout.insert_port(false, ea_conn.from_node, ea_conn.from_port, a_point);
 			self.conn_layout.insert_port(true,  ea_conn.to_node,   ea_conn.to_port,   b_point);
 			let key = (ea_conn.from_node, ea_conn.from_port);
@@ -69,81 +69,10 @@ impl<'a> NodeGraph<'a> {
 			self.conn_layout.block_port(b_point);
 		}
 		for mut ea_placement in self.placements.values().cloned() {
-			ea_placement.x = self.width as u16 - ea_placement.x - ea_placement.width;
+			ea_placement.x = (self.width as u16).saturating_sub(ea_placement.x + ea_placement.width);
 			self.conn_layout.block_zone(ea_placement);
 		}
 		self.conn_layout.calculate();
-
-		/*
-      // old connection algorithm
-		self.connections.sort_by(|a,b| {
-			match a.from_node.cmp(&b.from_node) {
-				std::cmp::Ordering::Equal => a.from_port.cmp(&b.from_node),
-				other => other,
-			}
-		});
-		let mut idx_alias = 0;
-		'conn: for ea_conn in self.connections.iter().copied() {
-			let a_pos = self.placements[&ea_conn.from_node];
-			let b_pos = self.placements[&ea_conn.to_node];
-			// NOTE: don't forget that left and right are swapped
-			let a_point = (a_pos.left(), a_pos.top() + ea_conn.from_port as u16 + 1);
-			let b_point = (b_pos.right() + 1, b_pos.top() + ea_conn.to_port as u16 + 1);
-			// check for intersections
-			{
-				let conn_bbox = Rect {
-					x: a_point.0.min(b_point.0),
-					y: a_point.1.min(b_point.1),
-					width: a_point.0.abs_diff(b_point.0),
-					height: a_point.1.abs_diff(b_point.1),
-				};
-				for ea_node in self.placements.values() {
-					if conn_bbox.intersects(*ea_node) {
-						let from = (false, ea_conn.from_node, ea_conn.from_port);
-						let to = (true, ea_conn.to_node, ea_conn.to_port);
-						if let Some(alias) = self.alias_connections.get(&from) {
-							self.alias_connections.insert(to, *alias);
-						}
-						else {
-							let alias = ALIAS_CHARS[idx_alias];
-							idx_alias += 1;
-							self.alias_connections.insert(from, alias);
-							self.alias_connections.insert(to, alias);
-						}
-						continue 'conn
-					}
-				}
-			};
-			let layout = self.conn_layout.entry(ea_conn)
-				.or_insert(ConnectionLayout::new(a_point));
-			if a_point.0 < b_point.0 {
-				debug!("skipped due to reversed direction {ea_conn:?}");
-				continue
-			}
-			if a_point.1 != b_point.1 { // different heights
-				let midpoint = (a_point.0 + b_point.0)/2;
-				if midpoint != a_point.0 {
-					// right
-					layout.push((Direction::East, a_point.0 - midpoint));
-				}
-				// up/down
-				if a_point.1 > b_point.1 {
-					layout.push((Direction::North, a_point.1 - b_point.1));
-				}
-				else {
-					layout.push((Direction::South, b_point.1 - a_point.1));
-				}
-				if midpoint != b_point.0 {
-					// right
-					layout.push((Direction::East, midpoint - b_point.0));
-				}
-			}
-			else if a_point.0 != b_point.0 {
-				layout.push((Direction::East, a_point.0 - b_point.0));
-			}
-			// `layout.points` should be empty if `a_point` and `b_point` are the same
-		}
-		*/
 	}
 
 	/// ATTENTION: x_offs works in the opposite direction (higher values are
@@ -247,81 +176,8 @@ impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
 	type State = ();
 
 	fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
-		self.conn_layout.render(buf);
-		/*
 		// draw connections
-		'conn: for ea_layout in self.conn_layout.values() {
-			let symbols = BorderType::line_symbols(ea_layout.border());
-			let mut current_position = ea_layout.start_pos();
-			let mut last_dir = Direction::East;
-			use Direction::*;
-			for (ea_direction, ea_distance) in ea_layout.points() {
-				let corner = match (ea_direction, last_dir) {
-					(East,  East ) | (West,  West ) => symbols.horizontal,
-					(East,  West ) | (West,  East ) => unreachable!(),
-					(North, North) | (South, South) => symbols.vertical,
-					(North, South) | (South, North) => unreachable!(),
-					(East,  North) | (South, West ) => symbols.top_left,
-					(West,  North) | (South, East ) => symbols.top_right,
-					(East,  South) | (North, West ) => symbols.bottom_left,
-					(West,  South) | (North, East ) => symbols.bottom_right,
-				};
-				if current_position.0 > area.width || current_position.1 >= area.bottom() { continue 'conn }
-				buf.get_mut(area.width - current_position.0, current_position.1)
-					.set_symbol(corner)
-					.set_style(ea_layout.style());
-				match ea_direction {
-					Direction::East => {
-						for idx in 1..*ea_distance {
-							if current_position.0 - idx > area.width || current_position.1 >= area.bottom() { continue 'conn }
-							buf.get_mut(area.width - (current_position.0 - idx), current_position.1)
-								.set_symbol(symbols.horizontal)
-								.set_style(ea_layout.style());
-						}
-						current_position.0 -= ea_distance;
-					}
-					Direction::West => {
-						for idx in 1..*ea_distance {
-							if current_position.0 + idx > area.width || current_position.1 >= area.bottom() { continue 'conn }
-							buf.get_mut(area.width - (current_position.0 + idx), current_position.1)
-								.set_symbol(symbols.horizontal)
-								.set_style(ea_layout.style());
-						}
-						current_position.0 += ea_distance;
-					}
-					Direction::North => {
-						for idx in 1..*ea_distance {
-							if current_position.0 > area.width || current_position.1 - idx >= area.bottom() { continue 'conn }
-							buf.get_mut(area.width - current_position.0, current_position.1 - idx)
-								.set_symbol(symbols.vertical)
-								.set_style(ea_layout.style());
-						}
-						current_position.1 -= ea_distance;
-					}
-					Direction::South => {
-						for idx in 1..*ea_distance {
-							if current_position.0 > area.width || current_position.1 + idx >= area.bottom() { continue 'conn }
-							buf.get_mut(area.width - current_position.0, current_position.1 + idx)
-								.set_symbol(symbols.vertical)
-								.set_style(ea_layout.style());
-						}
-		            current_position.1 += ea_distance;
-					}
-				}
-				last_dir = *ea_direction;
-			}
-			if current_position.0 > area.width || current_position.1 >= area.bottom() { continue 'conn }
-			let corner = match last_dir {
-				East  => symbols.horizontal,
-				West  => unreachable!(),
-				North => symbols.top_left,
-				South => symbols.bottom_left,
-			};
-			buf.get_mut(area.width - current_position.0, current_position.1)
-				.set_symbol(corner)
-				.set_style(ea_layout.style());
-		}
-		*/
+		self.conn_layout.render(buf);
 
 		// draw nodes
 		'node: for (idx_node, ea_node) in self.nodes.into_iter().enumerate() {
@@ -329,21 +185,24 @@ impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
 				if pos.right() > area.width || pos.bottom() > area.height { continue 'node }
 				// draw box
 				pos.x = area.width - pos.right();
-				let block = Block::default().border_type(ea_node.border).borders(Borders::ALL).title(ea_node.title());
+				let block = ea_node.block();
 				block.render(pos, buf);
 				// draw connection ports
 				for ea_conn in get_upstream(&self.connections, idx_node) {
 					// draw connection alias
 					if let Some(alias_char) = self.conn_layout.alias_connections.get(&(true, idx_node, ea_conn.to_port)) {
-						buf.get_mut(pos.left() - 1, pos.top() + ea_conn.to_port as u16 + 1)
-							.set_symbol(alias_char)
-							.set_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::Red))
-						;
+						let y = pos.top() + ea_conn.to_port as u16 + 1;
+						if pos.left() > 0 && y < area.width {
+							buf.get_mut(pos.left() - 1, y)
+								.set_symbol(alias_char)
+								.set_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::Red))
+							;
+						}
 					}
 
 					// draw port
 					buf.get_mut(pos.left(), pos.top() + ea_conn.to_port as u16 + 1)
-						.set_symbol(conn_symbol(true, ea_node.border, BorderType::Double))
+						.set_symbol(conn_symbol(true, ea_node.border_type(), ea_conn.border_type()))
 					;
 				}
 				for ea_conn in get_downstream(&self.connections, idx_node) {
@@ -357,7 +216,7 @@ impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
 
 					// draw port
 					buf.get_mut(pos.right() - 1, pos.top() + ea_conn.from_port as u16 + 1)
-						.set_symbol(conn_symbol(false, ea_node.border, BorderType::Double))
+						.set_symbol(conn_symbol(false, ea_node.border_type(), ea_conn.border_type()))
 					;
 				}
 			}
