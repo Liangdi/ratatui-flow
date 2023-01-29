@@ -7,7 +7,7 @@ use tui::{
 	layout::Rect,
 	buffer::Buffer,
 	style::Style,
-	widgets::{Block, Widget, BorderType, Borders},
+	widgets::Widget,
 };
 
 mod connection;
