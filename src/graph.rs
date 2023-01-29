@@ -10,7 +10,6 @@ pub struct NodeGraph<'a> {
 	pub conn_layout: ConnectionsLayout,
 //	conn_layout: Map<Connection, ConnectionLayout>,
 	/// <(is_input, x, y), rendered_char>
-	alias_connections: Map<(bool, usize, usize), &'static str>,
 	width: usize,
 }
 
@@ -26,7 +25,6 @@ impl<'a> NodeGraph<'a> {
 			connections,
 			conn_layout: ConnectionsLayout::new(width, height),
 			placements: Default::default(),
-			alias_connections: Default::default(),
 			width,
 		}
 	}
@@ -336,7 +334,7 @@ impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
 				// draw connection ports
 				for ea_conn in get_upstream(&self.connections, idx_node) {
 					// draw connection alias
-					if let Some(alias_char) = self.alias_connections.get(&(true, idx_node, ea_conn.to_port)) {
+					if let Some(alias_char) = self.conn_layout.alias_connections.get(&(true, idx_node, ea_conn.to_port)) {
 						buf.get_mut(pos.left() - 1, pos.top() + ea_conn.to_port as u16 + 1)
 							.set_symbol(alias_char)
 							.set_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::Red))
@@ -350,7 +348,7 @@ impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
 				}
 				for ea_conn in get_downstream(&self.connections, idx_node) {
 					// draw connection alias
-					if let Some(alias_char) = self.alias_connections.get(&(false, idx_node, ea_conn.from_port)) {
+					if let Some(alias_char) = self.conn_layout.alias_connections.get(&(false, idx_node, ea_conn.from_port)) {
 						buf.get_mut(pos.right(), pos.top() + ea_conn.from_port as u16 + 1)
 							.set_symbol(alias_char)
 							.set_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::Red))

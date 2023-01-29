@@ -1,4 +1,3 @@
-#[macro_use] extern crate log;
 use std::collections::HashMap as Map;
 use std::collections::BTreeSet as Set;
 use tui::layout::Margin;
@@ -15,7 +14,6 @@ mod connection;
 use connection::*;
 pub use connection::Connection;
 mod node;
-use node::*;
 pub use node::NodeLayout;
 mod graph;
 pub use graph::*;

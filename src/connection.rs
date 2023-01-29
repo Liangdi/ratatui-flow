@@ -1,8 +1,5 @@
 use std::collections::BTreeMap as Map;
-use tui::{
-	style::Style,
-	widgets::BorderType, buffer::Buffer, layout::Rect,
-};
+use tui::{widgets::BorderType, buffer::Buffer, layout::Rect};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Direction {
@@ -64,41 +61,6 @@ impl Connection {
 	}
 }
 
-#[derive(Debug, Clone)]
-pub struct ConnectionLayout {
-	start_pos: (u16, u16),
-	points: Vec<(Direction, u16)>,
-	border: BorderType,
-	style: Style,
-}
-
-impl ConnectionLayout {
-	pub fn new(start_pos: (u16, u16)) -> Self {
-		Self {
-			start_pos,
-			points: Vec::new(),
-			border: BorderType::Rounded,
-			style: Style::default(),
-		}
-	}
-
-	pub fn start_pos(&self) -> (u16, u16) {
-		self.start_pos
-	}
-	pub fn style(&self) -> Style {
-		self.style
-	}
-	pub fn border(&self) -> BorderType {
-		self.border
-	}
-	pub fn push(&mut self, item: (Direction, u16)) {
-		self.points.push(item)
-	}
-	pub fn points(&self) -> &Vec<(Direction, u16)> {
-		&self.points
-	}
-}
-
 /// Generate the correct connection symbol for this node
 pub fn conn_symbol(is_input: bool, block_style: BorderType, conn_style: BorderType) -> &'static str {
 	let out = match (block_style, conn_style) {
@@ -144,6 +106,7 @@ pub struct ConnectionsLayout {
 	edge_field: Betweens<Edge>,
 	width: usize,
 	height: usize,
+	pub alias_connections: Map<(bool, usize, usize), &'static str>,
 }
 
 impl ConnectionsLayout {
@@ -154,6 +117,7 @@ impl ConnectionsLayout {
 			edge_field: Betweens::new(width, height),
 			width,
 			height,
+			alias_connections: Map::new(),
 		}
 	}
 
@@ -184,6 +148,7 @@ impl ConnectionsLayout {
 	}
 
 	pub fn calculate(&mut self) {
+		let mut idx_next_alias = 0;
 		'outer: for ea_conn in &self.connections {
 			let start = (self.ports[&(false, ea_conn.0.from_node, ea_conn.0.from_port)], Direction::East);
 			let goal  = (self.ports[&(true, ea_conn.0.to_node, ea_conn.0.to_port)],      Direction::West);
@@ -249,6 +214,13 @@ impl ConnectionsLayout {
 					next = from;
 				}
 				else {
+					// register alias character
+					if !self.alias_connections.contains_key(&(false, ea_conn.0.from_node, ea_conn.0.from_port)) {
+						self.alias_connections.insert((false, ea_conn.0.from_node, ea_conn.0.from_port), ALIAS_CHARS[idx_next_alias]);
+						idx_next_alias += 1;
+					}
+					let alias = self.alias_connections[&(false, ea_conn.0.from_node, ea_conn.0.from_port)];
+					self.alias_connections.insert((true, ea_conn.0.to_node, ea_conn.0.to_port), alias);
 					println!("couldnt connect {start:?} to {goal:?}");
 					continue 'outer
 				}
