@@ -34,7 +34,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
 	let space = Rect {
 		x: 0, y: 0,
-		width: 80,
+		width: 54,
 		height: 10,
 	};
 	let mut graph = NodeGraph::new(
@@ -54,7 +54,7 @@ fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
 			Connection::new(4,0,3,0), // e | d
 			Connection::new(4,0,0,1), // e | d
 			Connection::new(5,0,1,1), // f > b
-			Connection::new(5,0,4,6), // f > e
+			Connection::new(5,0,4,1), // f > e
 			Connection::new(6,0,0,0), // g | a
 			Connection::new(6,0,5,0), // g | f
 		],

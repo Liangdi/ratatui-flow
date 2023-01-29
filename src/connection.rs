@@ -166,11 +166,21 @@ impl ConnectionsLayout {
 	}
 
 	pub fn block_zone(&mut self, area: Rect) {
-		for x in 0..area.width-1 {
+		for x in 0..area.width {
 			for y in 0..area.height {
-				self.edge_field[(((x + area.x) as usize, (y + area.y) as usize), Direction::East).into()] = Edge::Blocked;
+				if x != area.width-1 {
+					self.edge_field[(((x + area.x) as usize, (y + area.y) as usize), Direction::East).into()] = Edge::Blocked;
+				}
+				if y != area.height-1 {
+					self.edge_field[(((x + area.x) as usize, (y + area.y) as usize), Direction::South).into()] = Edge::Blocked;
+				}
 			}
 		}
+	}
+
+	pub fn block_port(&mut self, coord: (usize, usize)) {
+		self.edge_field[(coord, Direction::North).into()] = Edge::Blocked;
+		self.edge_field[(coord, Direction::South).into()] = Edge::Blocked;
 	}
 
 	pub fn calculate(&mut self) {
@@ -246,12 +256,11 @@ impl ConnectionsLayout {
 		}
 	}
 
-	pub fn render(&self, area: Rect, buf: &mut Buffer) {
+	pub fn render(&self, buf: &mut Buffer) {
 		let sym = BorderType::line_symbols(BorderType::Plain);
-		let dub = BorderType::line_symbols(BorderType::Rounded);
 
-		for ea_conn in self.connections.iter() { println!("{ea_conn:?}"); }
-		for ea_port in self.ports.iter() { println!("{ea_port:?}"); }
+	//	for ea_conn in self.connections.iter() { println!("{ea_conn:?}"); }
+	//	for ea_port in self.ports.iter() { println!("{ea_port:?}"); }
 	//	self.edge_field.print_with(1, |ea| print!("{:>1} ", ea));
 	//	println!("{}{}{}", dub.top_left, dub.horizontal.repeat(self.width), dub.top_right);
 		for y in 0..self.height {
@@ -263,8 +272,18 @@ impl ConnectionsLayout {
 				let east  = self.edge_field[(pos, Direction::East).into()];
 				let west  = self.edge_field[(pos, Direction::West).into()];
 				let symbol = match (north, south, east, west) {
-					(n, s, e, w) if n == B || s == B || e == B || w == B => continue,
-					(E, E, E, E) => continue,
+					(B | E, B | E, B | E, B | E) => continue,
+					(n, s, e, w) if n == B || s == B || e == B || w == B => {
+						if n == B && s == B && e != E || w != E {
+							sym.horizontal
+						}
+						else if e == B && w == B && n != E && s != E {
+							sym.vertical
+						}
+						else {
+							continue
+						}
+					},
 					(n, s, e, w) if n == s && n == e && n == w => sym.cross,
 					(n, s, e, w) if n == s && e == w && n != E && e != E => sym.vertical, // intersections should just be verticals
 					(n, s, E, w) if n == s && n == w => sym.vertical_left,
