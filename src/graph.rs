@@ -1,5 +1,7 @@
 use super::*;
 
+const MARGIN: u16 = 6;
+
 #[derive(Debug)]
 pub struct NodeGraph<'a> {
 	nodes: Vec<NodeLayout<'a>>,
@@ -65,6 +67,10 @@ impl<'a> NodeGraph<'a> {
 				next_idx += 1;
 			}
 			self.conn_layout.push_connection((*ea_conn, conn_map[&key]));
+		}
+		for mut ea_placement in self.placements.values().cloned() {
+			ea_placement.x = self.width as u16 - ea_placement.x - ea_placement.width;
+			self.conn_layout.block_zone(ea_placement);
 		}
 		self.conn_layout.calculate();
 
@@ -176,11 +182,11 @@ impl<'a> NodeGraph<'a> {
 		for ea_child in get_upstream(&self.connections, idx_node) {
 			if self.placements.contains_key(&ea_child.from_node) {
 				// nudge it (if necessary)
-				self.nudge(ea_child.from_node, rect_me.x + rect_me.width + 3);
+				self.nudge(ea_child.from_node, rect_me.x + rect_me.width + MARGIN);
 			}
 			else {
 				// place it
-				self.place_node(ea_child.from_node, x + rect_me.width + 3, y, main_chain);
+				self.place_node(ea_child.from_node, x + rect_me.width + MARGIN, y, main_chain);
 				main_chain.clear();
 				y += self.placements[&ea_child.from_node].height;
 			}
@@ -194,7 +200,7 @@ impl<'a> NodeGraph<'a> {
 			self.placements.get_mut(&idx_node).unwrap().x = x;
 			for ea_child in get_upstream(&self.connections, idx_node) {
 				assert!(self.placements.contains_key(&ea_child.from_node));
-				self.nudge(ea_child.from_node, x + rect_me.width + 3);
+				self.nudge(ea_child.from_node, x + rect_me.width + MARGIN);
 			}
 		}
 	}

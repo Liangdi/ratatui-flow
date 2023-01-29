@@ -135,6 +135,7 @@ pub enum Edge {
 	Connection(usize),
 }
 const E: Edge = Edge::Empty;
+const B: Edge = Edge::Blocked;
 
 #[derive(Debug)]
 pub struct ConnectionsLayout {
@@ -162,6 +163,14 @@ impl ConnectionsLayout {
 
 	pub fn insert_port(&mut self, is_input: bool, node: usize, port: usize, pos: (usize, usize)) {
 		self.ports.insert((is_input, node, port), pos);
+	}
+
+	pub fn block_zone(&mut self, area: Rect) {
+		for x in 0..area.width-1 {
+			for y in 0..area.height {
+				self.edge_field[(((x + area.x) as usize, (y + area.y) as usize), Direction::East).into()] = Edge::Blocked;
+			}
+		}
 	}
 
 	pub fn calculate(&mut self) {
@@ -254,7 +263,8 @@ impl ConnectionsLayout {
 				let east  = self.edge_field[(pos, Direction::East).into()];
 				let west  = self.edge_field[(pos, Direction::West).into()];
 				let symbol = match (north, south, east, west) {
-					(E, E, E, E) => " ",
+					(n, s, e, w) if n == B || s == B || e == B || w == B => continue,
+					(E, E, E, E) => continue,
 					(n, s, e, w) if n == s && n == e && n == w => sym.cross,
 					(n, s, e, w) if n == s && e == w && n != E && e != E => sym.vertical, // intersections should just be verticals
 					(n, s, E, w) if n == s && n == w => sym.vertical_left,
@@ -268,11 +278,11 @@ impl ConnectionsLayout {
 					(n, E, e, E) if n == e => sym.bottom_left,
 					(E, s, e, E) if s == e => sym.top_left,
 
-					(_, E, E, E) => "↑",
-					(E, _, E, E) => "↓",
-					(E, E, _, E) => "→",
-					(E, E, E, _) => "←",
-					(n, s, e, w) => "?",//unreachable!("{n} {s} {e} {w}"),
+					(_, E, E, E) => sym.vertical,
+					(E, _, E, E) => sym.vertical,
+					(E, E, _, E) => sym.horizontal,
+					(E, E, E, _) => sym.horizontal,
+					(_, _, _, _) => "?",//unreachable!("{n} {s} {e} {w}"),
 				};
 				buf.get_mut(x as u16, y as u16)
 					.set_symbol(symbol)

@@ -34,8 +34,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
 	let space = Rect {
 		x: 0, y: 0,
-		width: 18,
-		height: 8,
+		width: 80,
+		height: 10,
 	};
 	let mut graph = NodeGraph::new(
 		vec![
@@ -43,11 +43,20 @@ fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
 			NodeLayout::new((4, 4)),
 			NodeLayout::new((4, 4)),
 			NodeLayout::new((4, 4)),
+			NodeLayout::new((4, 4)),
+			NodeLayout::new((4, 4)),
+			NodeLayout::new((4, 4)),
 		],
 		vec![
-			Connection::new(0,0,1,0),
-			Connection::new(1,0,2,0),
-			Connection::new(3,0,2,1),
+			Connection::new(0,0,1,0), // a | b
+			Connection::new(1,0,2,0), // b | c
+			Connection::new(3,0,2,1), // d > c
+			Connection::new(4,0,3,0), // e | d
+			Connection::new(4,0,0,1), // e | d
+			Connection::new(5,0,1,1), // f > b
+			Connection::new(5,0,4,6), // f > e
+			Connection::new(6,0,0,0), // g | a
+			Connection::new(6,0,5,0), // g | f
 		],
 		space.width as usize,
 		space.height as usize,
