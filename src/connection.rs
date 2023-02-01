@@ -258,7 +258,7 @@ impl ConnectionsLayout {
 		}
 	}
 
-	pub fn render(&self, buf: &mut Buffer) {
+	pub fn render(&self, area: Rect, buf: &mut Buffer) {
 		let bor = |idx: Edge| -> line::Set {
 			if let Edge::Connection(idx) = idx {
 				BorderType::line_symbols(self.border_types[&idx])
@@ -328,7 +328,7 @@ impl ConnectionsLayout {
 					(n, s, e, w) if n == s && e == w && n != E && e != E => bor(n).vertical, // intersections should just be verticals
 					(_, _, _, _) => "?",//unreachable!("{n} {s} {e} {w}"),
 				};
-				buf.get_mut(x as u16, y as u16)
+				buf.get_mut(x as u16 + area.left(), y as u16 + area.top())
 					.set_symbol(symbol)
 				//	.set_style(ea_layout.style())
 				;

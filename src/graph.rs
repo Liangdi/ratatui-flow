@@ -177,14 +177,15 @@ impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
 
 	fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
 		// draw connections
-		self.conn_layout.render(buf);
+		self.conn_layout.render(area, buf);
 
 		// draw nodes
 		'node: for (idx_node, ea_node) in self.nodes.into_iter().enumerate() {
 			if let Some(mut pos) = self.placements.get(&idx_node).copied() {
 				if pos.right() > area.width || pos.bottom() > area.height { continue 'node }
 				// draw box
-				pos.x = area.width - pos.right();
+				pos.x = area.left() + area.width - pos.right();
+				pos.y += area.top();
 				let block = ea_node.block();
 				block.render(pos, buf);
 				// draw connection ports

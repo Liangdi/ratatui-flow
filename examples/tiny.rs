@@ -2,7 +2,7 @@
 
 use tui::{
 	backend::{Backend, CrosstermBackend},
-	Frame, Terminal, widgets::Paragraph, layout::Rect
+	Frame, Terminal, widgets::{Paragraph, BorderType}, layout::Rect
 };
 
 use tui_nodes::*;
@@ -39,24 +39,24 @@ fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
 	};
 	let mut graph = NodeGraph::new(
 		vec![
-			NodeLayout::new((4, 4)),
-			NodeLayout::new((4, 4)),
-			NodeLayout::new((4, 4)),
-			NodeLayout::new((4, 4)),
-			NodeLayout::new((4, 4)),
-			NodeLayout::new((4, 4)),
-			NodeLayout::new((4, 4)),
+			NodeLayout::new((4, 4)).with_border_type(BorderType::Thick),
+			NodeLayout::new((4, 4)).with_border_type(BorderType::Thick),
+			NodeLayout::new((4, 4)).with_border_type(BorderType::Rounded),
+			NodeLayout::new((4, 4)).with_border_type(BorderType::Thick),
+			NodeLayout::new((4, 4)).with_border_type(BorderType::Double),
+			NodeLayout::new((4, 4)).with_border_type(BorderType::Thick),
+			NodeLayout::new((4, 4)).with_border_type(BorderType::Double),
 		],
 		vec![
-			Connection::new(0,0,1,0), // a | b
-			Connection::new(1,0,2,0), // b | c
-			Connection::new(3,0,2,1), // d > c
+			Connection::new(0,0,1,0).with_border_type(BorderType::Double), // a | b
+			Connection::new(1,0,2,0).with_border_type(BorderType::Thick), // b | c
+			Connection::new(3,0,2,1).with_border_type(BorderType::Double), // d > c
 			Connection::new(4,0,3,0), // e | d
 			Connection::new(4,0,0,1), // e | d
 			Connection::new(5,0,1,1), // f > b
 			Connection::new(5,0,4,1), // f > e
 			Connection::new(6,0,0,0), // g | a
-			Connection::new(6,0,5,0), // g | f
+			Connection::new(6,0,5,0).with_border_type(BorderType::Double), // g | f
 		],
 		space.width as usize,
 		space.height as usize,
