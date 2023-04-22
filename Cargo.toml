@@ -15,7 +15,7 @@ license = "MIT"
 [dependencies]
 tui = { version = "0.19", default-features = false }
 log = "0.4.17"
-sorted-vec = "*"
+sorted-vec = "0.8.2"
 
 [dev-dependencies]
 tui = { version = "0.19", features = ["crossterm"] }
