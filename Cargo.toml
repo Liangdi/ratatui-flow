@@ -1,6 +1,6 @@
 [package]
 name = "tui-nodes"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 authors = ["jaxter184 <jaxter184@gmail.com>"]
 description = """
@@ -13,10 +13,10 @@ readme = "README.md"
 license = "MIT"
 
 [dependencies]
-tui = { version = "0.19", default-features = false }
+ratatui = { version = "0.21", default-features = false }
 log = "0.4.17"
 sorted-vec = "0.8.2"
 
 [dev-dependencies]
-tui = { version = "0.19", features = ["crossterm"] }
+ratatui = { version = "0.21", features = ["crossterm"] }
 crossterm = "0.25"

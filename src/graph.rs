@@ -170,7 +170,7 @@ fn get_downstream(conns: &Vec<Connection>, idx_node: usize) -> Vec<Connection> {
 	downstream
 }
 
-impl<'a> tui::widgets::StatefulWidget for NodeGraph<'a> {
+impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 	// eventually, this will contain stuff like view position
 //	type State = NodeGraphState;
 	type State = ();

@@ -1,9 +1,9 @@
 use std::collections::HashMap as Map;
 use std::collections::BTreeSet as Set;
-use tui::layout::Margin;
-use tui::style::Color;
-use tui::style::Modifier;
-use tui::{
+use ratatui::layout::Margin;
+use ratatui::style::Color;
+use ratatui::style::Modifier;
+use ratatui::{
 	layout::Rect,
 	buffer::Buffer,
 	style::Style,

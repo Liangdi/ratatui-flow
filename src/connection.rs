@@ -1,5 +1,10 @@
 use std::collections::BTreeMap as Map;
-use tui::{widgets::BorderType, buffer::Buffer, layout::Rect, symbols::line};
+use ratatui::{
+	widgets::BorderType,
+	buffer::Buffer,
+	layout::Rect,
+	symbols::line,
+};
 
 const SEARCH_TIMEOUT: usize = 5000;
 

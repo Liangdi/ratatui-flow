@@ -1,4 +1,7 @@
-use tui::{widgets::{BorderType, Block, Borders}, style::Style};
+use ratatui::{
+	widgets::{BorderType, Block, Borders},
+	style::Style,
+};
 
 /// Render information for a single node
 #[derive(Debug)]
