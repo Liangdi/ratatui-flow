@@ -1,6 +1,6 @@
 // boilerplate from from tui-rs examples
 
-use tui::{
+use ratatui::{
 	backend::{Backend, CrosstermBackend},
 	Frame, Terminal, widgets::{Paragraph, BorderType}, layout::Rect
 };
