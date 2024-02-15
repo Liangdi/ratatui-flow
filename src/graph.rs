@@ -204,7 +204,7 @@ impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 
 					// draw port
 					buf.get_mut(pos.left(), pos.top() + ea_conn.to_port as u16 + 1)
-						.set_symbol(conn_symbol(true, ea_node.border_type(), ea_conn.border_type()))
+						.set_symbol(conn_symbol(true, ea_node.border_type(), ea_conn.line_type()))
 					;
 				}
 				for ea_conn in get_downstream(&self.connections, idx_node) {
@@ -218,7 +218,7 @@ impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 
 					// draw port
 					buf.get_mut(pos.right() - 1, pos.top() + ea_conn.from_port as u16 + 1)
-						.set_symbol(conn_symbol(false, ea_node.border_type(), ea_conn.border_type()))
+						.set_symbol(conn_symbol(false, ea_node.border_type(), ea_conn.line_type()))
 					;
 				}
 			}

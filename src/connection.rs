@@ -8,6 +8,38 @@ use ratatui::{
 
 const SEARCH_TIMEOUT: usize = 5000;
 
+#[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum LineType {
+	#[default]
+	Plain,
+	Rounded,
+	Double,
+	Thick,
+}
+
+impl LineType {
+	fn to_line_set(&self) -> line::Set {
+		match self {
+			LineType::Plain   => line::NORMAL,
+			LineType::Rounded => line::ROUNDED,
+			LineType::Double  => line::DOUBLE,
+			LineType::Thick   => line::THICK,
+		}
+	}
+}
+
+impl From<BorderType> for LineType {
+	fn from(value: BorderType) -> Self {
+		match value {
+			BorderType::Plain   => LineType::Plain,
+			BorderType::Rounded => LineType::Rounded,
+			BorderType::Double  => LineType::Double,
+			BorderType::Thick   => LineType::Thick,
+			_ => unimplemented!(),
+		}
+	}
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Direction {
 	North = 0,
@@ -60,47 +92,49 @@ pub struct Connection {
 	pub from_port: usize,
 	pub to_node: usize,
 	pub to_port: usize,
-	border_type: BorderType,
+	line_type: LineType,
 }
 
 impl Connection {
 	pub fn new(from_node: usize, from_port: usize, to_node: usize, to_port: usize) -> Self {
 		Self {
 			from_node, from_port, to_node, to_port,
-			border_type: BorderType::Rounded,
+			line_type: LineType::Rounded,
 		}
 	}
 
-	pub fn with_border_type(mut self, border_type: BorderType) -> Self {
-		self.border_type = border_type;
+	pub fn with_line_type(mut self, line_type: LineType) -> Self {
+		self.line_type = line_type;
 		self
 	}
 
-	pub fn border_type(&self) -> BorderType {
-		self.border_type
+	pub fn line_type(&self) -> LineType {
+		self.line_type
 	}
 }
 
 /// Generate the correct connection symbol for this node
-pub fn conn_symbol(is_input: bool, block_style: BorderType, conn_style: BorderType) -> &'static str {
+pub fn conn_symbol(is_input: bool, block_style: BorderType, conn_style: LineType) -> &'static str {
 	let out = match (block_style, conn_style) {
 		(BorderType::Plain
-		|BorderType::Rounded, BorderType::Thick)   => ("┥", "┝"),
+		|BorderType::Rounded, LineType::Thick)   => ("┥", "┝"),
 		(BorderType::Plain
-		|BorderType::Rounded, BorderType::Double)  => ("╡", "╞"),
+		|BorderType::Rounded, LineType::Double)  => ("╡", "╞"),
 		(BorderType::Plain
-		|BorderType::Rounded, BorderType::Plain
-		                    | BorderType::Rounded) => ("┤", "├"),
+		|BorderType::Rounded, LineType::Plain
+		                    | LineType::Rounded) => ("┤", "├"),
 
-		(BorderType::Thick,   BorderType::Thick)   => ("┫", "┣"),
-		(BorderType::Thick,   BorderType::Double)  => ("╡", "╞"), // fallback
-		(BorderType::Thick,   BorderType::Plain
-		                    | BorderType::Rounded) => ("┨", "┠"),
+		(BorderType::Thick,   LineType::Thick)   => ("┫", "┣"),
+		(BorderType::Thick,   LineType::Double)  => ("╡", "╞"), // fallback
+		(BorderType::Thick,   LineType::Plain
+		                    | LineType::Rounded) => ("┨", "┠"),
 
-		(BorderType::Double,  BorderType::Thick)   => ("╢", "╟"), // fallback
-		(BorderType::Double,  BorderType::Double)  => ("╣", "╠"),
-		(BorderType::Double,  BorderType::Plain
-		                    | BorderType::Rounded) => ("╢", "╟"),
+		(BorderType::Double,  LineType::Thick)   => ("╢", "╟"), // fallback
+		(BorderType::Double,  LineType::Double)  => ("╣", "╠"),
+		(BorderType::Double,  LineType::Plain
+		                    | LineType::Rounded) => ("╢", "╟"),
+		(BorderType::QuadrantInside
+		|BorderType::QuadrantOutside, _)   => ("u", "u"),
 	};
 	if is_input { out.0 } else { out.1 }
 }
@@ -127,7 +161,7 @@ pub struct ConnectionsLayout {
 	width: usize,
 	height: usize,
 	pub alias_connections: Map<(bool, usize, usize), &'static str>,
-	border_types: Map<usize, BorderType>,
+	line_types: Map<usize, LineType>,
 }
 
 impl ConnectionsLayout {
@@ -139,7 +173,7 @@ impl ConnectionsLayout {
 			width,
 			height,
 			alias_connections: Map::new(),
-			border_types: Map::new(),
+			line_types: Map::new(),
 		}
 	}
 
@@ -172,7 +206,7 @@ impl ConnectionsLayout {
 	pub fn calculate(&mut self) {
 		let mut idx_next_alias = 0;
 		'outer: for ea_conn in &self.connections {
-			self.border_types.insert(ea_conn.1, ea_conn.0.border_type());
+			self.line_types.insert(ea_conn.1, ea_conn.0.line_type());
 			let start = (self.ports[&(false, ea_conn.0.from_node, ea_conn.0.from_port)], Direction::West);
 			let goal  = (self.ports[&(true, ea_conn.0.to_node, ea_conn.0.to_port)],      Direction::East);
 			if start.0.0 > self.edge_field.width || start.0.1 > self.edge_field.height {
@@ -266,7 +300,7 @@ impl ConnectionsLayout {
 	pub fn render(&self, area: Rect, buf: &mut Buffer) {
 		let bor = |idx: Edge| -> line::Set {
 			if let Edge::Connection(idx) = idx {
-				BorderType::line_symbols(self.border_types[&idx])
+				self.line_types[&idx].to_line_set()
 			}
 			else if idx == Edge::Blocked {
 				line::THICK

@@ -12,7 +12,7 @@ use ratatui::{
 
 mod connection;
 use connection::*;
-pub use connection::Connection;
+pub use connection::{Connection, LineType};
 mod node;
 pub use node::NodeLayout;
 mod graph;
