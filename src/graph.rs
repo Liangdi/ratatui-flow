@@ -143,7 +143,7 @@ impl<'a> NodeGraph<'a> {
 				let mut pos = *pos;
 				pos.x = area.width - pos.right() + area.x;
 				pos.y += area.y;
-				pos.inner(&Margin { horizontal: 1, vertical: 1 })
+				pos.inner(Margin { horizontal: 1, vertical: 1 })
 			})
 			.unwrap_or_default()
 		}).collect()
