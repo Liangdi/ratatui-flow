@@ -152,7 +152,7 @@ impl<'a> NodeGraph<'a> {
 	}
 }
 
-fn get_upstream(conns: &Vec<Connection>, idx_node: usize) -> Vec<Connection> {
+fn get_upstream(conns: &[Connection], idx_node: usize) -> Vec<Connection> {
 	// find children and order them
 	let mut upstream: Vec<_> = conns.iter()
 		.filter(|ea| { ea.to_node == idx_node })
@@ -162,7 +162,7 @@ fn get_upstream(conns: &Vec<Connection>, idx_node: usize) -> Vec<Connection> {
 	upstream
 }
 
-fn get_downstream(conns: &Vec<Connection>, idx_node: usize) -> Vec<Connection> {
+fn get_downstream(conns: &[Connection], idx_node: usize) -> Vec<Connection> {
 	// find parents and order them
 	let mut downstream: Vec<_> = conns.iter()
 		.filter(|ea| { ea.from_node == idx_node })
