@@ -1,3 +1,5 @@
+use ratatui::layout::Position;
+
 use super::*;
 
 const MARGIN: u16 = 5;
@@ -195,7 +197,8 @@ impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 					if let Some(alias_char) = self.conn_layout.alias_connections.get(&(true, idx_node, ea_conn.to_port)) {
 						let y = pos.top() + ea_conn.to_port as u16 + 1;
 						if pos.left() > 0 && y < area.width {
-							buf.get_mut(pos.left() - 1, y)
+							buf.cell_mut(Position::new(pos.left() - 1, y))
+                                .unwrap()
 								.set_symbol(alias_char)
 								.set_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::Red))
 							;
@@ -203,21 +206,24 @@ impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 					}
 
 					// draw port
-					buf.get_mut(pos.left(), pos.top() + ea_conn.to_port as u16 + 1)
+					buf.cell_mut(Position::new(pos.left(), pos.top() + ea_conn.to_port as u16 + 1))
+                        .unwrap()
 						.set_symbol(conn_symbol(true, ea_node.border_type(), ea_conn.line_type()))
 					;
 				}
 				for ea_conn in get_downstream(&self.connections, idx_node) {
 					// draw connection alias
 					if let Some(alias_char) = self.conn_layout.alias_connections.get(&(false, idx_node, ea_conn.from_port)) {
-						buf.get_mut(pos.right(), pos.top() + ea_conn.from_port as u16 + 1)
+						buf.cell_mut(Position::new(pos.right(), pos.top() + ea_conn.from_port as u16 + 1))
+                            .unwrap()
 							.set_symbol(alias_char)
 							.set_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::Red))
 						;
 					}
 
 					// draw port
-					buf.get_mut(pos.right() - 1, pos.top() + ea_conn.from_port as u16 + 1)
+					buf.cell_mut(Position::new(pos.right() - 1, pos.top() + ea_conn.from_port as u16 + 1))
+                        .unwrap()
 						.set_symbol(conn_symbol(false, ea_node.border_type(), ea_conn.line_type()))
 					;
 				}

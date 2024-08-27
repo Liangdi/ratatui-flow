@@ -1,9 +1,6 @@
 use std::collections::BTreeMap as Map;
 use ratatui::{
-	widgets::BorderType,
-	buffer::Buffer,
-	layout::Rect,
-	symbols::line,
+	buffer::Buffer, layout::{Position, Rect}, symbols::line, widgets::BorderType
 };
 
 const SEARCH_TIMEOUT: usize = 5000;
@@ -367,7 +364,8 @@ impl ConnectionsLayout {
 					(n, s, e, w) if n == s && e == w && n != E && e != E => bor(n).vertical, // intersections should just be verticals
 					(_, _, _, _) => "?",//unreachable!("{n} {s} {e} {w}"),
 				};
-				buf.get_mut(x as u16 + area.left(), y as u16 + area.top())
+				buf.cell_mut(Position::new(x as u16 + area.left(), y as u16 + area.top()))
+                    .unwrap()
 					.set_symbol(symbol)
 				//	.set_style(ea_layout.style())
 				;
