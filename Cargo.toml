@@ -19,4 +19,3 @@ sorted-vec = "0.8.2"
 
 [dev-dependencies]
 ratatui = { version = "0.28", features = ["crossterm"] }
-crossterm = "0.25"
