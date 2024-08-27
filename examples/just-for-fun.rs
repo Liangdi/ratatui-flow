@@ -1,7 +1,7 @@
 // boilerplate from from tui-rs examples
 
 use ratatui::{
-	backend::{Backend, CrosstermBackend},
+	backend::CrosstermBackend,
 	Frame, Terminal
 };
 
@@ -27,8 +27,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	Ok(())
 }
 
-fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
-	let space = f.size();
+fn ui(f: &mut Frame, _app: &App) {
+	let space = f.area();
 	let mut graph = NodeGraph::new(
 		vec![
 			NodeLayout::new((40, 10)).with_title("a"),

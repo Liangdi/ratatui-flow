@@ -1,7 +1,7 @@
 // boilerplate from from tui-rs examples
 
 use ratatui::{
-	backend::{Backend, CrosstermBackend},
+	backend::CrosstermBackend,
 	Frame, Terminal, widgets::{Paragraph, BorderType}, layout::Rect
 };
 
@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	Ok(())
 }
 
-fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
+fn ui(f: &mut Frame, _app: &App) {
 	let space = Rect {
 		x: 0, y: 0,
 		width: 54,
@@ -48,15 +48,15 @@ fn ui<B: Backend>(f: &mut Frame<B>, _app: &App) {
 			NodeLayout::new((4, 4)).with_border_type(BorderType::Double),
 		],
 		vec![
-			Connection::new(0,0,1,0).with_border_type(BorderType::Double), // a | b
-			Connection::new(1,0,2,0).with_border_type(BorderType::Thick), // b | c
-			Connection::new(3,0,2,1).with_border_type(BorderType::Double), // d > c
+			Connection::new(0,0,1,0).with_line_type(LineType::Double), // a | b
+			Connection::new(1,0,2,0).with_line_type(LineType::Thick), // b | c
+			Connection::new(3,0,2,1).with_line_type(LineType::Double), // d > c
 			Connection::new(4,0,3,0), // e | d
 			Connection::new(4,0,0,1), // e | d
 			Connection::new(5,0,1,1), // f > b
 			Connection::new(5,0,4,1), // f > e
 			Connection::new(6,0,0,0), // g | a
-			Connection::new(6,0,5,0).with_border_type(BorderType::Double), // g | f
+			Connection::new(6,0,5,0).with_line_type(LineType::Double), // g | f
 		],
 		space.width as usize,
 		space.height as usize,
