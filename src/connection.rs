@@ -90,6 +90,7 @@ pub struct Connection {
 	pub to_node: usize,
 	pub to_port: usize,
 	line_type: LineType,
+    line_style: Style,
 }
 
 impl Connection {
@@ -97,6 +98,7 @@ impl Connection {
 		Self {
 			from_node, from_port, to_node, to_port,
 			line_type: LineType::Rounded,
+            line_style: Style::default()
 		}
 	}
 
@@ -107,6 +109,15 @@ impl Connection {
 
 	pub fn line_type(&self) -> LineType {
 		self.line_type
+	}
+
+	pub fn with_line_style(mut self, line_style: Style) -> Self {
+		self.line_style = line_style;
+		self
+	}
+
+	pub fn line_style(&self) -> Style {
+		self.line_style
 	}
 }
 
