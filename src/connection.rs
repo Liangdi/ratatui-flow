@@ -1,6 +1,6 @@
 use std::collections::BTreeMap as Map;
 use ratatui::{
-	buffer::Buffer, layout::{Position, Rect}, symbols::line, widgets::BorderType
+	buffer::Buffer, layout::{Position, Rect}, style::Style, symbols::line, widgets::BorderType
 };
 
 const SEARCH_TIMEOUT: usize = 5000;
@@ -170,6 +170,7 @@ pub struct ConnectionsLayout {
 	height: usize,
 	pub alias_connections: Map<(bool, usize, usize), &'static str>,
 	line_types: Map<usize, LineType>,
+    line_styles: Map<usize, Style> 
 }
 
 impl ConnectionsLayout {
@@ -182,6 +183,7 @@ impl ConnectionsLayout {
 			height,
 			alias_connections: Map::new(),
 			line_types: Map::new(),
+            line_styles: Map::new()
 		}
 	}
 
@@ -215,6 +217,7 @@ impl ConnectionsLayout {
 		let mut idx_next_alias = 0;
 		'outer: for ea_conn in &self.connections {
 			self.line_types.insert(ea_conn.1, ea_conn.0.line_type());
+			self.line_styles.insert(ea_conn.1, ea_conn.0.line_style());
 			let start = (self.ports[&(false, ea_conn.0.from_node, ea_conn.0.from_port)], Direction::West);
 			let goal  = (self.ports[&(true, ea_conn.0.to_node, ea_conn.0.to_port)],      Direction::East);
 			if start.0.0 > self.edge_field.width || start.0.1 > self.edge_field.height {
@@ -329,6 +332,15 @@ impl ConnectionsLayout {
 				}
 			}
 		};
+
+        let get_line_style = |idx: Edge| -> Style {
+            if let Edge::Connection(idx) = idx {
+                self.line_styles[&idx]
+            }
+            else {
+                Style::default()
+            }
+		};
 	//	for ea_conn in self.connections.iter() { println!("{ea_conn:?}"); }
 	//	for ea_port in self.ports.iter() { println!("{ea_port:?}"); }
 	//	self.edge_field.print_with(1, |ea| print!("{:>1} ", ea));
@@ -375,10 +387,45 @@ impl ConnectionsLayout {
 					(n, s, e, w) if n == s && e == w && n != E && e != E => bor(n).vertical, // intersections should just be verticals
 					(_, _, _, _) => "?",//unreachable!("{n} {s} {e} {w}"),
 				};
+
+				let line_style = match (north, south, east, west) {
+					(n, s, e, w) if n == B || s == B || e == B || w == B => {
+						if n == B && s == B && e != E || w != E && e == w {
+							get_line_style(e)
+						}
+						else if e == B && w == B && n != E && s != E && n == s {
+							get_line_style(n)
+						}
+						else {
+							Style::default()
+						}
+					},
+					(n, E, E, E) => get_line_style(n),
+					(E, s, E, E) => get_line_style(s),
+					(E, E, e, E) => get_line_style(e),
+					(E, E, E, w) => get_line_style(w),
+
+					(n, s, E, w) if n == s && n == w => get_line_style(n),
+					(n, E, e, w) if n == e && n == w => get_line_style(n),
+					(n, s, e, E) if n == s && n == e => get_line_style(n),
+					(E, s, e, w) if s == e && s == w => get_line_style(s),
+					(E, s, E, w) if s == w => get_line_style(s),
+					(n, E, E, w) if n == w => get_line_style(n),
+					(n, E, e, E) if n == e => get_line_style(n),
+					(E, s, e, E) if s == e => get_line_style(s),
+
+					(n, s, E, E) if n == s => get_line_style(n),
+					(E, E, e, w) if e == w => get_line_style(e),
+
+					(n, s, e, w) if n == s && n == e && n == w => get_line_style(n),
+					(n, s, e, w) if n == s && e == w && n != E && e != E => get_line_style(n),
+					(_, _, _, _) => Style::default(),//unreachable!("{n} {s} {e} {w}"),
+				};
+
 				buf.cell_mut(Position::new(x as u16 + area.left(), y as u16 + area.top()))
                     .unwrap()
 					.set_symbol(symbol)
-				//	.set_style(ea_layout.style())
+					.set_style(line_style)
 				;
 			}
 	//		println!("{}", dub.vertical);
