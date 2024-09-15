@@ -90,7 +90,7 @@ pub struct Connection {
 	pub to_node: usize,
 	pub to_port: usize,
 	line_type: LineType,
-    line_style: Style,
+	line_style: Style,
 }
 
 impl Connection {
@@ -98,7 +98,7 @@ impl Connection {
 		Self {
 			from_node, from_port, to_node, to_port,
 			line_type: LineType::Rounded,
-            line_style: Style::default()
+			line_style: Style::default()
 		}
 	}
 
@@ -170,7 +170,7 @@ pub struct ConnectionsLayout {
 	height: usize,
 	pub alias_connections: Map<(bool, usize, usize), &'static str>,
 	line_types: Map<usize, LineType>,
-    line_styles: Map<usize, Style> 
+	line_styles: Map<usize, Style>
 }
 
 impl ConnectionsLayout {
@@ -183,7 +183,7 @@ impl ConnectionsLayout {
 			height,
 			alias_connections: Map::new(),
 			line_types: Map::new(),
-            line_styles: Map::new()
+			line_styles: Map::new()
 		}
 	}
 
@@ -333,13 +333,13 @@ impl ConnectionsLayout {
 			}
 		};
 
-        let get_line_style = |idx: Edge| -> Style {
-            if let Edge::Connection(idx) = idx {
-                self.line_styles[&idx]
-            }
-            else {
-                Style::default()
-            }
+		let get_line_style = |idx: Edge| -> Style {
+			if let Edge::Connection(idx) = idx {
+				self.line_styles[&idx]
+			}
+			else {
+				Style::default()
+			}
 		};
 	//	for ea_conn in self.connections.iter() { println!("{ea_conn:?}"); }
 	//	for ea_port in self.ports.iter() { println!("{ea_port:?}"); }
@@ -353,77 +353,43 @@ impl ConnectionsLayout {
 				let south = self.edge_field[(pos, Direction::South).into()];
 				let east  = self.edge_field[(pos, Direction::East).into()];
 				let west  = self.edge_field[(pos, Direction::West).into()];
-				let symbol = match (north, south, east, west) {
+				let (symbol, line_style) = match (north, south, east, west) {
 					(B | E, B | E, B | E, B | E) => continue,
 					(n, s, e, w) if n == B || s == B || e == B || w == B => {
 						if n == B && s == B && e != E || w != E && e == w {
-							bor(e).horizontal
+							(bor(e).horizontal, get_line_style(e))
 						}
 						else if e == B && w == B && n != E && s != E && n == s {
-							bor(n).vertical
+							(bor(n).vertical, get_line_style(n))
 						}
 						else {
-							"*"
+							("*", Style::default())
 						}
 					},
-					(n, E, E, E) => bor(n).vertical,
-					(E, s, E, E) => bor(s).vertical,
-					(E, E, e, E) => bor(e).horizontal,
-					(E, E, E, w) => bor(w).horizontal,
+					(n, E, E, E) => (bor(n).vertical, get_line_style(n)),
+					(E, s, E, E) => (bor(s).vertical, get_line_style(s)),
+					(E, E, e, E) => (bor(e).horizontal, get_line_style(e)),
+					(E, E, E, w) => (bor(w).horizontal, get_line_style(w)),
 
-					(n, s, E, w) if n == s && n == w => bor(n).vertical_left,
-					(n, E, e, w) if n == e && n == w => bor(n).horizontal_up,
-					(n, s, e, E) if n == s && n == e => bor(n).vertical_right,
-					(E, s, e, w) if s == e && s == w => bor(s).horizontal_down,
-					(E, s, E, w) if s == w => bor(s).top_right,
-					(n, E, E, w) if n == w => bor(n).bottom_right,
-					(n, E, e, E) if n == e => bor(n).bottom_left,
-					(E, s, e, E) if s == e => bor(s).top_left,
+					(n, s, E, w) if n == s && n == w => (bor(n).vertical_left, get_line_style(n)),
+					(n, E, e, w) if n == e && n == w => (bor(n).horizontal_up, get_line_style(n)),
+					(n, s, e, E) if n == s && n == e => (bor(n).vertical_right, get_line_style(n)),
+					(E, s, e, w) if s == e && s == w => (bor(s).horizontal_down, get_line_style(s)),
+					(E, s, E, w) if s == w => (bor(s).top_right, get_line_style(s)),
+					(n, E, E, w) if n == w => (bor(n).bottom_right, get_line_style(n)),
+					(n, E, e, E) if n == e => (bor(n).bottom_left, get_line_style(n)),
+					(E, s, e, E) if s == e => (bor(s).top_left, get_line_style(s)),
 
-					(n, s, E, E) if n == s => bor(n).vertical,
-					(E, E, e, w) if e == w => bor(e).horizontal,
+					(n, s, E, E) if n == s => (bor(n).vertical, get_line_style(n)),
+					(E, E, e, w) if e == w => (bor(e).horizontal, get_line_style(e)),
 
-					(n, s, e, w) if n == s && n == e && n == w => bor(n).cross,
-					(n, s, e, w) if n == s && e == w && n != E && e != E => bor(n).vertical, // intersections should just be verticals
-					(_, _, _, _) => "?",//unreachable!("{n} {s} {e} {w}"),
-				};
-
-				let line_style = match (north, south, east, west) {
-					(n, s, e, w) if n == B || s == B || e == B || w == B => {
-						if n == B && s == B && e != E || w != E && e == w {
-							get_line_style(e)
-						}
-						else if e == B && w == B && n != E && s != E && n == s {
-							get_line_style(n)
-						}
-						else {
-							Style::default()
-						}
-					},
-					(n, E, E, E) => get_line_style(n),
-					(E, s, E, E) => get_line_style(s),
-					(E, E, e, E) => get_line_style(e),
-					(E, E, E, w) => get_line_style(w),
-
-					(n, s, E, w) if n == s && n == w => get_line_style(n),
-					(n, E, e, w) if n == e && n == w => get_line_style(n),
-					(n, s, e, E) if n == s && n == e => get_line_style(n),
-					(E, s, e, w) if s == e && s == w => get_line_style(s),
-					(E, s, E, w) if s == w => get_line_style(s),
-					(n, E, E, w) if n == w => get_line_style(n),
-					(n, E, e, E) if n == e => get_line_style(n),
-					(E, s, e, E) if s == e => get_line_style(s),
-
-					(n, s, E, E) if n == s => get_line_style(n),
-					(E, E, e, w) if e == w => get_line_style(e),
-
-					(n, s, e, w) if n == s && n == e && n == w => get_line_style(n),
-					(n, s, e, w) if n == s && e == w && n != E && e != E => get_line_style(n),
-					(_, _, _, _) => Style::default(),//unreachable!("{n} {s} {e} {w}"),
+					(n, s, e, w) if n == s && n == e && n == w => (bor(n).cross, get_line_style(n)),
+					(n, s, e, w) if n == s && e == w && n != E && e != E => (bor(n).vertical, get_line_style(n)), // intersections should just be verticals
+					(_, _, _, _) => ("?", Style::default()),//unreachable!("{n} {s} {e} {w}"),
 				};
 
 				buf.cell_mut(Position::new(x as u16 + area.left(), y as u16 + area.top()))
-                    .unwrap()
+					.unwrap()
 					.set_symbol(symbol)
 					.set_style(line_style)
 				;
