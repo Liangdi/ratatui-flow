@@ -1,6 +1,6 @@
 use ratatui::{
-	widgets::{BorderType, Block, Borders},
 	style::Style,
+	widgets::{Block, BorderType, Borders},
 };
 
 /// Render information for a single node
@@ -11,8 +11,8 @@ pub struct NodeLayout<'a> {
 	border_type: BorderType,
 	title: &'a str,
 	border_style: Style,
-//	in_ports: Vec<PortLayout>,
-//	out_ports: Vec<PortLayout>,
+	//	in_ports: Vec<PortLayout>,
+	//	out_ports: Vec<PortLayout>,
 }
 
 impl<'a> NodeLayout<'a> {
@@ -43,7 +43,7 @@ impl<'a> NodeLayout<'a> {
 		self.border_type
 	}
 
-	pub fn with_border_style(mut self, style: Style) -> Self{
+	pub fn with_border_style(mut self, style: Style) -> Self {
 		self.border_style = style;
 		self
 	}

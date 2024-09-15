@@ -1,14 +1,9 @@
-use std::collections::HashMap as Map;
-use std::collections::BTreeSet as Set;
 use ratatui::layout::Margin;
 use ratatui::style::Color;
 use ratatui::style::Modifier;
-use ratatui::{
-	layout::Rect,
-	buffer::Buffer,
-	style::Style,
-	widgets::Widget,
-};
+use ratatui::{buffer::Buffer, layout::Rect, style::Style, widgets::Widget};
+use std::collections::BTreeSet as Set;
+use std::collections::HashMap as Map;
 
 mod connection;
 use connection::*;

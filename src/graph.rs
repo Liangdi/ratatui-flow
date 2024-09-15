@@ -10,8 +10,6 @@ pub struct NodeGraph<'a> {
 	connections: Vec<Connection>,
 	placements: Map<usize, Rect>,
 	pub conn_layout: ConnectionsLayout,
-//	conn_layout: Map<Connection, ConnectionLayout>,
-	/// <(is_input, x, y), rendered_char>
 	width: usize,
 }
 
@@ -57,10 +55,21 @@ impl<'a> NodeGraph<'a> {
 			let a_pos = self.placements[&ea_conn.from_node];
 			let b_pos = self.placements[&ea_conn.to_node];
 			// NOTE: don't forget that left and right are swapped
-			let a_point = (self.width.saturating_sub(a_pos.left().into()), a_pos.top() as usize + ea_conn.from_port + 1);
-			let b_point = (self.width.saturating_sub(b_pos.right() as usize + 1), b_pos.top() as usize + ea_conn.to_port + 1);
-			self.conn_layout.insert_port(false, ea_conn.from_node, ea_conn.from_port, a_point);
-			self.conn_layout.insert_port(true,  ea_conn.to_node,   ea_conn.to_port,   b_point);
+			let a_point = (
+				self.width.saturating_sub(a_pos.left().into()),
+				a_pos.top() as usize + ea_conn.from_port + 1,
+			);
+			let b_point = (
+				self.width.saturating_sub(b_pos.right() as usize + 1),
+				b_pos.top() as usize + ea_conn.to_port + 1,
+			);
+			self.conn_layout.insert_port(
+				false,
+				ea_conn.from_node,
+				ea_conn.from_port,
+				a_point,
+			);
+			self.conn_layout.insert_port(true, ea_conn.to_node, ea_conn.to_port, b_point);
 			let key = (ea_conn.from_node, ea_conn.from_port);
 			if !conn_map.contains_key(&key) {
 				conn_map.insert(key, next_idx);
@@ -71,7 +80,8 @@ impl<'a> NodeGraph<'a> {
 			self.conn_layout.block_port(b_point);
 		}
 		for mut ea_placement in self.placements.values().cloned() {
-			ea_placement.x = (self.width as u16).saturating_sub(ea_placement.x + ea_placement.width);
+			ea_placement.x =
+				(self.width as u16).saturating_sub(ea_placement.x + ea_placement.width);
 			self.conn_layout.block_zone(ea_placement);
 		}
 		self.conn_layout.calculate();
@@ -80,7 +90,13 @@ impl<'a> NodeGraph<'a> {
 	/// ATTENTION: x_offs works in the opposite direction (higher values are
 	/// further left) and y_offs is the same as tui (higher values are further
 	/// down)
-	fn place_node(&mut self, idx_node: usize, x: u16, y: u16, main_chain: &mut Vec<usize>) {
+	fn place_node(
+		&mut self,
+		idx_node: usize,
+		x: u16,
+		y: u16,
+		main_chain: &mut Vec<usize>,
+	) {
 		// place the node
 		let size_me = self.nodes[idx_node].size;
 		let mut rect_me = Rect { x, y, width: size_me.0, height: size_me.1 };
@@ -96,10 +112,10 @@ impl<'a> NodeGraph<'a> {
 			for (_, ea_them) in self.placements.iter() {
 				if rect_me.intersects(*ea_them) {
 					rect_me.y = rect_me.y.max(ea_them.bottom());
-					continue 'outer
+					continue 'outer;
 				}
 			}
-			break
+			break;
 		}
 		for ea_node in main_chain.iter() {
 			let y = self.placements[ea_node].y.max(rect_me.y);
@@ -114,10 +130,14 @@ impl<'a> NodeGraph<'a> {
 			if self.placements.contains_key(&ea_child.from_node) {
 				// nudge it (if necessary)
 				self.nudge(ea_child.from_node, rect_me.x + rect_me.width + MARGIN);
-			}
-			else {
+			} else {
 				// place it
-				self.place_node(ea_child.from_node, x + rect_me.width + MARGIN, y, main_chain);
+				self.place_node(
+					ea_child.from_node,
+					x + rect_me.width + MARGIN,
+					y,
+					main_chain,
+				);
 				main_chain.clear();
 				y += self.placements[&ea_child.from_node].height;
 			}
@@ -137,45 +157,44 @@ impl<'a> NodeGraph<'a> {
 	}
 
 	pub fn split(&self, area: Rect) -> Vec<Rect> {
-		(0..self.nodes.len()).map(|idx_node| {
-			self.placements.get(&idx_node).map(|pos| {
-				if pos.right() > area.width || pos.bottom() > area.height {
-					return Rect { x: 0, y: 0, width: 0, height: 0, }
-				}
-				let mut pos = *pos;
-				pos.x = area.width - pos.right() + area.x;
-				pos.y += area.y;
-				pos.inner(Margin { horizontal: 1, vertical: 1 })
+		(0..self.nodes.len())
+			.map(|idx_node| {
+				self.placements
+					.get(&idx_node)
+					.map(|pos| {
+						if pos.right() > area.width || pos.bottom() > area.height {
+							return Rect { x: 0, y: 0, width: 0, height: 0 };
+						}
+						let mut pos = *pos;
+						pos.x = area.width - pos.right() + area.x;
+						pos.y += area.y;
+						pos.inner(Margin { horizontal: 1, vertical: 1 })
+					})
+					.unwrap_or_default()
 			})
-			.unwrap_or_default()
-		}).collect()
+			.collect()
 	}
 }
 
 fn get_upstream(conns: &[Connection], idx_node: usize) -> Vec<Connection> {
 	// find children and order them
-	let mut upstream: Vec<_> = conns.iter()
-		.filter(|ea| { ea.to_node == idx_node })
-		.copied()
-		.collect();
-	upstream.sort_by(|a,b| a.to_port.cmp(&b.to_port));
+	let mut upstream: Vec<_> =
+		conns.iter().filter(|ea| ea.to_node == idx_node).copied().collect();
+	upstream.sort_by(|a, b| a.to_port.cmp(&b.to_port));
 	upstream
 }
 
 fn get_downstream(conns: &[Connection], idx_node: usize) -> Vec<Connection> {
 	// find parents and order them
-	let mut downstream: Vec<_> = conns.iter()
-		.filter(|ea| { ea.from_node == idx_node })
-		.copied()
-		.collect()
-	;
-	downstream.sort_by(|a,b| a.from_port.cmp(&b.from_port));
+	let mut downstream: Vec<_> =
+		conns.iter().filter(|ea| ea.from_node == idx_node).copied().collect();
+	downstream.sort_by(|a, b| a.from_port.cmp(&b.from_port));
 	downstream
 }
 
 impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 	// eventually, this will contain stuff like view position
-//	type State = NodeGraphState;
+	//	type State = NodeGraphState;
 	type State = ();
 
 	fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
@@ -185,7 +204,9 @@ impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 		// draw nodes
 		'node: for (idx_node, ea_node) in self.nodes.into_iter().enumerate() {
 			if let Some(mut pos) = self.placements.get(&idx_node).copied() {
-				if pos.right() > area.width || pos.bottom() > area.height { continue 'node }
+				if pos.right() > area.width || pos.bottom() > area.height {
+					continue 'node;
+				}
 				// draw box
 				pos.x = area.left() + area.width - pos.right();
 				pos.y += area.top();
@@ -194,42 +215,73 @@ impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 				// draw connection ports
 				for ea_conn in get_upstream(&self.connections, idx_node) {
 					// draw connection alias
-					if let Some(alias_char) = self.conn_layout.alias_connections.get(&(true, idx_node, ea_conn.to_port)) {
+					if let Some(alias_char) = self.conn_layout.alias_connections.get(&(
+						true,
+						idx_node,
+						ea_conn.to_port,
+					)) {
 						let y = pos.top() + ea_conn.to_port as u16 + 1;
 						if pos.left() > 0 && y < area.width {
 							buf.cell_mut(Position::new(pos.left() - 1, y))
-                                .unwrap()
+								.unwrap()
 								.set_symbol(alias_char)
-								.set_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::Red))
-							;
+								.set_style(
+									Style::default()
+										.add_modifier(Modifier::BOLD)
+										.bg(Color::Red),
+								);
 						}
 					}
 
 					// draw port
-					buf.cell_mut(Position::new(pos.left(), pos.top() + ea_conn.to_port as u16 + 1))
-                        .unwrap()
-						.set_symbol(conn_symbol(true, ea_node.border_type(), ea_conn.line_type()))
-					;
+					buf.cell_mut(Position::new(
+						pos.left(),
+						pos.top() + ea_conn.to_port as u16 + 1,
+					))
+					.unwrap()
+					.set_symbol(conn_symbol(
+						true,
+						ea_node.border_type(),
+						ea_conn.line_type(),
+					));
 				}
 				for ea_conn in get_downstream(&self.connections, idx_node) {
 					// draw connection alias
-					if let Some(alias_char) = self.conn_layout.alias_connections.get(&(false, idx_node, ea_conn.from_port)) {
-						buf.cell_mut(Position::new(pos.right(), pos.top() + ea_conn.from_port as u16 + 1))
-                            .unwrap()
-							.set_symbol(alias_char)
-							.set_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::Red))
-						;
+					if let Some(alias_char) = self.conn_layout.alias_connections.get(&(
+						false,
+						idx_node,
+						ea_conn.from_port,
+					)) {
+						buf.cell_mut(Position::new(
+							pos.right(),
+							pos.top() + ea_conn.from_port as u16 + 1,
+						))
+						.unwrap()
+						.set_symbol(alias_char)
+						.set_style(
+							Style::default().add_modifier(Modifier::BOLD).bg(Color::Red),
+						);
 					}
 
 					// draw port
-					buf.cell_mut(Position::new(pos.right() - 1, pos.top() + ea_conn.from_port as u16 + 1))
-                        .unwrap()
-						.set_symbol(conn_symbol(false, ea_node.border_type(), ea_conn.line_type()))
-					;
+					buf.cell_mut(Position::new(
+						pos.right() - 1,
+						pos.top() + ea_conn.from_port as u16 + 1,
+					))
+					.unwrap()
+					.set_symbol(conn_symbol(
+						false,
+						ea_node.border_type(),
+						ea_conn.line_type(),
+					));
 				}
-			}
-			else {
-				buf.set_string(0, idx_node as u16, format!("{idx_node}"), Style::default());
+			} else {
+				buf.set_string(
+					0,
+					idx_node as u16,
+					format!("{idx_node}"),
+					Style::default(),
+				);
 			}
 		}
 	}
