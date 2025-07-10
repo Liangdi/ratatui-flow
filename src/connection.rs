@@ -5,7 +5,7 @@ use ratatui::{
 	symbols::line,
 	widgets::BorderType,
 };
-use std::collections::BTreeMap as Map;
+use std::collections::{BTreeMap as Map, BinaryHeap};
 
 const SEARCH_TIMEOUT: usize = 5000;
 
@@ -264,7 +264,7 @@ impl ConnectionsLayout {
 				continue;
 			}
 			//println!("drawing connection {start:?} to {goal:?}");
-			let mut frontier = sorted_vec::SortedVec::new();
+			let mut frontier = BinaryHeap::new();
 			let mut came_from = Betweens::<Option<_>>::new(self.width, self.height);
 			let mut cost = Betweens::<isize>::new(self.width, self.height);
 			frontier.push(((0, 0), start));
