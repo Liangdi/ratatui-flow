@@ -36,7 +36,16 @@ impl From<BorderType> for LineType {
 			BorderType::Rounded => LineType::Rounded,
 			BorderType::Double => LineType::Double,
 			BorderType::Thick => LineType::Thick,
-			_ => unimplemented!(),
+			BorderType::LightDoubleDashed
+				| BorderType::LightTripleDashed
+				| BorderType::LightQuadrupleDashed
+				=> LineType::Plain,
+			BorderType::HeavyDoubleDashed
+				| BorderType::HeavyTripleDashed
+				| BorderType::HeavyQuadrupleDashed
+				=> LineType::Thick,
+			BorderType::QuadrantInside | BorderType::QuadrantOutside
+				=> unimplemented!(),
 		}
 	}
 }
@@ -154,6 +163,15 @@ pub fn conn_symbol(
 		(BorderType::Double, LineType::Thick) => ("╢", "╟"), // fallback
 		(BorderType::Double, LineType::Double) => ("╣", "╠"),
 		(BorderType::Double, LineType::Plain | LineType::Rounded) => ("╢", "╟"),
+
+		(
+			BorderType::LightDoubleDashed | BorderType::LightTripleDashed | BorderType::LightQuadrupleDashed,
+			_,
+		) => ("u", "u"),
+		(
+			BorderType::HeavyDoubleDashed | BorderType::HeavyTripleDashed | BorderType::HeavyQuadrupleDashed,
+			_,
+		) => ("u", "u"),
 		(BorderType::QuadrantInside | BorderType::QuadrantOutside, _) => ("u", "u"),
 	};
 	if is_input {
