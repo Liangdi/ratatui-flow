@@ -1,11 +1,11 @@
 # ratatui-flow
 
+中文 | [English](README.en.md)
+
 [![crates.io](https://img.shields.io/crates/v/ratatui-flow.svg)](https://crates.io/crates/ratatui-flow)
 [![docs.rs](https://docs.rs/ratatui-flow/badge.svg)](https://docs.rs/ratatui-flow)
 
-Node graph / flow diagram widgets for [ratatui](https://crates.io/crates/ratatui) — lay out
-boxes-and-arrows diagrams (DAGs) in the terminal, with auto-routed connections, content-aware
-node sizing, and structured diagnostics.
+[ratatui](https://crates.io/crates/ratatui) 的节点图 / 流程图 widget —— 在终端里布局“框 + 箭头”的有向无环图（DAG），支持连接线自动布线、节点按内容自适应尺寸，以及结构化的诊断信息。
 
 ```
                       ╭src────────────╮        ╭parse───────╮     ╭xform─────────────╮
@@ -17,20 +17,17 @@ node sizing, and structured diagnostics.
                                             ╰───────────────╯
 ```
 
-## Features
+## 特性
 
-- **Automatic layout** of node graphs (DAGs): place nodes, avoid overlaps, route connections.
-- **Auto-routed connections** via grid-based search, with per-connection line type / color / style.
-- **Content-aware node sizing** via `NodeLayout::from_content`, measuring display width
-  (CJK / emoji aware through `unicode-width`).
-- **Graceful degradation**: cycles, out-of-bounds node refs, or too-small canvases never panic —
-  they degrade gracefully and surface a `Diagnostic`.
-- **Minimal, sealed public API**: `NodeGraph`, `NodeLayout`, `Connection`, `LineType`
-  (+ `Diagnostic`). Internal layout types are not exposed.
+- **自动布局** 节点图（DAG）：放置节点、避免重叠、布线连接。
+- **连接自动布线**：基于网格搜索，每条连接可单独设置线型 / 颜色 / 样式。
+- **节点按内容自适应尺寸**：`NodeLayout::from_content` 按文本显示宽度计算（通过 `unicode-width`，正确处理 CJK / emoji 等宽字符）。
+- **优雅降级**：环、越界的节点引用、过小的画布都不会 panic，而是优雅处理并通过 `Diagnostic` 上报。
+- **最小化、封闭的公共 API**：`NodeGraph`、`NodeLayout`、`Connection`、`LineType`（外加 `Diagnostic`）；内部布局类型不对外暴露。
 
-## Quick start
+## 快速开始
 
-`Cargo.toml`:
+`Cargo.toml`：
 
 ```toml
 [dependencies]
@@ -51,16 +48,16 @@ let conns = vec![Connection::new(0, 0, 1, 0)];
 let mut graph = NodeGraph::new(nodes, conns, 120, 24);
 graph.calculate();
 
-// surface any non-fatal issues (unreachable nodes, failed routing, ...)
+// 上报非致命问题（不可达节点、布线失败……）
 for d in graph.diagnostics() {
     eprintln!("{d:?}");
 }
 ```
 
-Render it with ratatui:
+用 ratatui 渲染：
 
 ```rust
-// zones[i] is the inner content rect of node i
+// zones[i] 是第 i 个节点的内部内容区域
 let zones = graph.split(area);
 for (i, z) in zones.into_iter().enumerate() {
     f.render_widget(Paragraph::new(contents[i]), z);
@@ -68,45 +65,41 @@ for (i, z) in zones.into_iter().enumerate() {
 f.render_stateful_widget(graph, area, &mut ());
 ```
 
-## Examples
+## 示例
 
 ```bash
-cargo run --example viewport   # interactive: 16-node graph + keyboard scrolling
-cargo run --example content    # 6-node pipeline, content-aware sizing
-cargo run --example basic      # minimal
-cargo run --example tiny       # renders into a buffer and prints
+cargo run --example viewport   # 交互式：16 节点图 + 键盘滚动视口
+cargo run --example content    # 6 节点流水线，内容自适应尺寸
+cargo run --example basic      # 最小示例
+cargo run --example tiny       # 渲染到缓冲区并打印
 ```
 
-`viewport` demonstrates an application-level viewport (render once to a large off-screen
-buffer, then blit a scrolled window each frame), since the library itself does not yet have a
-built-in viewport. Controls: `hjkl` / arrows to scroll, `PgUp`/`PgDn`, `Home`, `q`/`Esc` to quit.
+`viewport` 演示了应用层的视口实现：把整张图一次性渲染到一个大的离屏 buffer，每帧只 blit 滚动后可见的那一块（库本身暂未内置视口）。操作：`hjkl` / 方向键滚动、`PgUp`/`PgDn`、`Home`、`q`/`Esc` 退出。
 
-## Diagnostics
+## 诊断
 
-Call `graph.diagnostics()` after `calculate()` to get `&[Diagnostic]`:
+`calculate()` 之后调用 `graph.diagnostics()` 获取 `&[Diagnostic]`：
 
-| Variant | Meaning |
+| 变体 | 含义 |
 |---|---|
-| `UnplacedNode { node }` | node is unreachable from any root (e.g. sits in a pure cycle) |
-| `InvalidConnectionRef { from_node, to_node }` | connection references an out-of-bounds node, skipped |
-| `RoutingFailed { from_node, from_port, to_node, to_port }` | a connection could not be routed and fell back to an alias character |
+| `UnplacedNode { node }` | 节点从任何根都不可达（例如位于纯环中），未被放置 |
+| `InvalidConnectionRef { from_node, to_node }` | 连接引用了越界的节点索引，已跳过 |
+| `RoutingFailed { from_node, from_port, to_node, to_port }` | 连接无法布线，降级为别名字符显示 |
 
-## API surface
+## API 概览
 
-| Item | Purpose |
+| 条目 | 用途 |
 |---|---|
-| `NodeGraph` | Owns nodes + connections. `new` / `calculate` / `split` / `diagnostics` + ratatui `StatefulWidget`. |
-| `NodeLayout` | One node's render info. `new((w,h))` or `from_content(text)` + builders. |
-| `Connection` | `new(from_node, from_port, to_node, to_port)` + `with_line_type` / `with_line_style`. |
-| `LineType` | `Plain` / `Rounded` / `Double` / `Thick`. |
-| `Diagnostic` | Observable layout/routing issues. |
+| `NodeGraph` | 持有节点 + 连接；`new` / `calculate` / `split` / `diagnostics` + 实现 ratatui `StatefulWidget`。 |
+| `NodeLayout` | 单个节点的渲染信息；`new((w,h))` 或 `from_content(text)` + builder。 |
+| `Connection` | `new(from_node, from_port, to_node, to_port)` + `with_line_type` / `with_line_style`。 |
+| `LineType` | `Plain` / `Rounded` / `Double` / `Thick`。 |
+| `Diagnostic` | 可观测的布局 / 布线问题。 |
 
-## Acknowledgements
+## 致谢
 
-`ratatui-flow` is a fork of [`tui-nodes`](https://git.sr.ht/~jaxter184/tui-nodes) by
-[jaxter184](https://git.sr.ht/~jaxter184), renamed and extended with robustness fixes, a test
-suite, a tightened public API, structured diagnostics, and content-aware node sizing.
+`ratatui-flow` 是 [`tui-nodes`](https://git.sr.ht/~jaxter184/tui-nodes)（作者 [jaxter184](https://git.sr.ht/~jaxter184)）的 fork，在此基础上去除 panic、补齐测试、收紧公共 API，并加入结构化诊断与内容自适应尺寸。
 
-## License
+## 许可证
 
-MIT (see [LICENSE](LICENSE)).
+MIT（见 [LICENSE](LICENSE)）。
