@@ -32,7 +32,7 @@
 ```toml
 [dependencies]
 ratatui = { version = "0.30", default-features = false }
-ratatui-flow = "0.10"
+ratatui-flow = "0.1"
 ```
 
 ```rust
