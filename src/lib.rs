@@ -7,8 +7,8 @@ use std::collections::HashMap as Map;
 
 mod connection;
 use connection::*;
-pub use connection::{Connection, LineType};
+pub use connection::{Connection, Diagnostic, LineType};
 mod node;
 pub use node::NodeLayout;
 mod graph;
-pub use graph::*;
+pub use graph::NodeGraph;

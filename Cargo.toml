@@ -1,24 +1,26 @@
 [package]
-name = "tui-nodes"
+name = "ratatui-flow"
 version = "0.10.0"
 edition = "2021"
-authors = ["jaxter184 <jaxter184@gmail.com>"]
+authors = ["Liangdi <wu@liangdi.me>"]
 description = """
-Node graph visualization for tui-rs
+Node graph / flow diagram widgets for ratatui
 """
-documentation = "https://docs.rs/tui-nodes/0.1.1/tui-nodes/"
-keywords = ["tui", "terminal"]
-repository = "https://git.sr.ht/~jaxter184/tui-nodes"
+documentation = "https://docs.rs/ratatui-flow"
+keywords = ["tui", "ratatui", "terminal", "graph", "flow"]
+repository = "https://github.com/Liangdi/ratatui-flow"
 readme = "README.md"
 license = "MIT"
 
 [dependencies]
 ratatui = { version = "0.30.0", default-features = false }
 log = "0.4.17"
+unicode-width = "0.2"
 
 [dev-dependencies]
 ratatui = { version = "0.30.0", features = ["crossterm"] }
-criterion = "0.5"
+crossterm = "0.29"
+criterion = "0.8"
 
 [[bench]]
 name = "calculate"

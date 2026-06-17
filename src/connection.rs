@@ -19,7 +19,7 @@ pub enum LineType {
 }
 
 impl LineType {
-	fn to_line_set(&self) -> line::Set {
+	fn to_line_set(self) -> line::Set<'static> {
 		match self {
 			LineType::Plain => line::NORMAL,
 			LineType::Rounded => line::ROUNDED,
@@ -45,13 +45,13 @@ impl From<BorderType> for LineType {
 				| BorderType::HeavyQuadrupleDashed
 				=> LineType::Thick,
 			BorderType::QuadrantInside | BorderType::QuadrantOutside
-				=> unimplemented!(),
+				=> LineType::Plain,
 		}
 	}
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Direction {
+pub(crate) enum Direction {
 	North = 0,
 	South = 1,
 	East = 2,
@@ -98,10 +98,10 @@ impl std::fmt::Debug for Direction {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Connection {
-	pub from_node: usize,
-	pub from_port: usize,
-	pub to_node: usize,
-	pub to_port: usize,
+	pub(crate) from_node: usize,
+	pub(crate) from_port: usize,
+	pub(crate) to_node: usize,
+	pub(crate) to_port: usize,
 	line_type: LineType,
 	line_style: Style,
 }
@@ -123,6 +123,22 @@ impl Connection {
 		}
 	}
 
+	pub fn from_node(&self) -> usize {
+		self.from_node
+	}
+
+	pub fn from_port(&self) -> usize {
+		self.from_port
+	}
+
+	pub fn to_node(&self) -> usize {
+		self.to_node
+	}
+
+	pub fn to_port(&self) -> usize {
+		self.to_port
+	}
+
 	pub fn with_line_type(mut self, line_type: LineType) -> Self {
 		self.line_type = line_type;
 		self
@@ -142,8 +158,26 @@ impl Connection {
 	}
 }
 
+/// Layout/routing problems detected during [`NodeGraph::calculate`][crate::NodeGraph::calculate] that would
+/// otherwise fail silently (a node not placed, a bad connection ignored, or a
+/// connection that couldn't be routed and fell back to an alias character).
+///
+/// Retrieve them via [`NodeGraph::diagnostics`][crate::NodeGraph::diagnostics].
+/// They are also emitted through `log::warn!`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Diagnostic {
+	/// A node is unreachable (not on any root node's upstream chain — e.g. a pure
+	/// cycle or an isolated node) and was therefore not placed.
+	UnplacedNode { node: usize },
+	/// A connection referenced an out-of-bounds node index and was ignored.
+	InvalidConnectionRef { from_node: usize, to_node: usize },
+	/// A connection could not be routed (the search timed out or found no path)
+	/// and was downgraded to an alias character for display.
+	RoutingFailed { from_node: usize, from_port: usize, to_node: usize, to_port: usize },
+}
+
 /// Generate the correct connection symbol for this node
-pub fn conn_symbol(
+pub(crate) fn conn_symbol(
 	is_input: bool,
 	block_style: BorderType,
 	conn_style: LineType,
@@ -167,12 +201,12 @@ pub fn conn_symbol(
 		(
 			BorderType::LightDoubleDashed | BorderType::LightTripleDashed | BorderType::LightQuadrupleDashed,
 			_,
-		) => ("u", "u"),
+		) => ("┤", "├"),
 		(
 			BorderType::HeavyDoubleDashed | BorderType::HeavyTripleDashed | BorderType::HeavyQuadrupleDashed,
 			_,
-		) => ("u", "u"),
-		(BorderType::QuadrantInside | BorderType::QuadrantOutside, _) => ("u", "u"),
+		) => ("┤", "├"),
+		(BorderType::QuadrantInside | BorderType::QuadrantOutside, _) => ("┤", "├"),
 	};
 	if is_input {
 		out.0
@@ -181,13 +215,13 @@ pub fn conn_symbol(
 	}
 }
 
-pub const ALIAS_CHARS: [&str; 24] = [
+pub(crate) const ALIAS_CHARS: [&str; 24] = [
 	"α", "β", "γ", "δ", "ε", "ζ", "η", "θ", "ι", "κ", "λ", "μ", "ν", "ξ", "ο", "π", "ρ",
 	"σ", "τ", "υ", "φ", "χ", "ψ", "ω",
 ];
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Edge {
+pub(crate) enum Edge {
 	#[default]
 	Empty,
 	Blocked,
@@ -197,19 +231,22 @@ const E: Edge = Edge::Empty;
 const B: Edge = Edge::Blocked;
 
 #[derive(Debug)]
-pub struct ConnectionsLayout {
+pub(crate) struct ConnectionsLayout {
 	ports: Map<(bool, usize, usize), (usize, usize)>, // (x,y)
 	connections: Vec<(Connection, usize)>,            // ((from, to), class)
 	edge_field: Betweens<Edge>,
 	width: usize,
 	height: usize,
-	pub alias_connections: Map<(bool, usize, usize), &'static str>,
+	pub(crate) alias_connections: Map<(bool, usize, usize), &'static str>,
 	line_types: Map<usize, LineType>,
 	line_styles: Map<usize, Style>,
+	/// Routing failures detected during [`calculate`][Self::calculate], drained
+	/// into `NodeGraph::diagnostics` by the caller.
+	pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
 impl ConnectionsLayout {
-	pub fn new(width: usize, height: usize) -> Self {
+	pub(crate) fn new(width: usize, height: usize) -> Self {
 		Self {
 			ports: Map::new(),
 			connections: Vec::new(),
@@ -219,14 +256,15 @@ impl ConnectionsLayout {
 			alias_connections: Map::new(),
 			line_types: Map::new(),
 			line_styles: Map::new(),
+			diagnostics: Vec::new(),
 		}
 	}
 
-	pub fn push_connection(&mut self, connection: (Connection, usize)) {
+	pub(crate) fn push_connection(&mut self, connection: (Connection, usize)) {
 		self.connections.push(connection)
 	}
 
-	pub fn insert_port(
+	pub(crate) fn insert_port(
 		&mut self,
 		is_input: bool,
 		node: usize,
@@ -236,33 +274,38 @@ impl ConnectionsLayout {
 		self.ports.insert((is_input, node, port), pos);
 	}
 
-	pub fn block_zone(&mut self, area: Rect) {
+	pub(crate) fn block_zone(&mut self, area: Rect) {
 		for x in 0..area.width {
 			for y in 0..area.height {
+				let cx = (x + area.x) as usize;
+				let cy = (y + area.y) as usize;
+				// Guard: skip cells that fall outside the canvas. East indexes
+				// horizontal[cy][cx+1] (needs cy<height && cx<width) and South
+				// indexes vertical[cy+1][cx] (needs cy<height && cx<width).
+				if cx >= self.width || cy >= self.height {
+					continue;
+				}
 				if x != area.width - 1 {
-					self.edge_field[(
-						((x + area.x) as usize, (y + area.y) as usize),
-						Direction::East,
-					)
-						.into()] = Edge::Blocked;
+					self.edge_field[((cx, cy), Direction::East).into()] = Edge::Blocked;
 				}
 				if y != area.height - 1 {
-					self.edge_field[(
-						((x + area.x) as usize, (y + area.y) as usize),
-						Direction::South,
-					)
-						.into()] = Edge::Blocked;
+					self.edge_field[((cx, cy), Direction::South).into()] = Edge::Blocked;
 				}
 			}
 		}
 	}
 
-	pub fn block_port(&mut self, coord: (usize, usize)) {
+	pub(crate) fn block_port(&mut self, coord: (usize, usize)) {
+		// Guard: North/South index vertical[coord.1][coord.0] and
+		// vertical[coord.1+1][coord.0], both requiring coord.0<width && coord.1<height.
+		if coord.0 >= self.width || coord.1 >= self.height {
+			return;
+		}
 		self.edge_field[(coord, Direction::North).into()] = Edge::Blocked;
 		self.edge_field[(coord, Direction::South).into()] = Edge::Blocked;
 	}
 
-	pub fn calculate(&mut self) {
+	pub(crate) fn calculate(&mut self) {
 		let mut idx_next_alias = 0;
 		'outer: for ea_conn in &self.connections {
 			self.line_types.insert(ea_conn.1, ea_conn.0.line_type());
@@ -344,20 +387,32 @@ impl ConnectionsLayout {
 				if let Some(from) = came_from[next.into()] {
 					next = from;
 				} else {
-					// register alias character
-					if !self.alias_connections.contains_key(&(
-						false,
+					// routing failed (search timed out or found no path):
+					// record a structured diagnostic, then fall back to an alias
+					// character so the connection still has *some* on-screen
+					// representation.
+					log::warn!(
+						"routing failed: no path found \
+						 (from_node={}, from_port={}, to_node={}, to_port={})",
 						ea_conn.0.from_node,
 						ea_conn.0.from_port,
-					)) {
-						self.alias_connections.insert(
-							(false, ea_conn.0.from_node, ea_conn.0.from_port),
-							ALIAS_CHARS[idx_next_alias],
-						);
-						idx_next_alias += 1;
-					}
-					let alias = self.alias_connections
-						[&(false, ea_conn.0.from_node, ea_conn.0.from_port)];
+						ea_conn.0.to_node,
+						ea_conn.0.to_port,
+					);
+					self.diagnostics.push(Diagnostic::RoutingFailed {
+						from_node: ea_conn.0.from_node,
+						from_port: ea_conn.0.from_port,
+						to_node: ea_conn.0.to_node,
+						to_port: ea_conn.0.to_port,
+					});
+					// register alias character
+					let alias = *self.alias_connections
+						.entry((false, ea_conn.0.from_node, ea_conn.0.from_port))
+						.or_insert_with(|| {
+							let a = ALIAS_CHARS[idx_next_alias % ALIAS_CHARS.len()];
+							idx_next_alias += 1;
+							a
+						});
 					self.alias_connections
 						.insert((true, ea_conn.0.to_node, ea_conn.0.to_port), alias);
 					continue 'outer;
@@ -376,7 +431,7 @@ impl ConnectionsLayout {
 		}
 	}
 
-	pub fn render(&self, area: Rect, buf: &mut Buffer) {
+	pub(crate) fn render(&self, area: Rect, buf: &mut Buffer) {
 		let bor = |idx: Edge| -> line::Set {
 			if let Edge::Connection(idx) = idx {
 				self.line_types[&idx].to_line_set()
@@ -448,13 +503,12 @@ impl ConnectionsLayout {
 					(_, _, _, _) => ("?", Style::default()),
 				};
 
-				buf.cell_mut(Position::new(
+				if let Some(cell) = buf.cell_mut(Position::new(
 					x as u16 + area.left(),
 					y as u16 + area.top(),
-				))
-				.unwrap()
-				.set_symbol(symbol)
-				.set_style(line_style);
+				)) {
+					cell.set_symbol(symbol).set_style(line_style);
+				}
 			}
 		}
 	}

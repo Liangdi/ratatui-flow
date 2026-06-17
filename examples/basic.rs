@@ -6,7 +6,7 @@ use ratatui::{
 	Frame, Terminal,
 };
 
-use tui_nodes::*;
+use ratatui_flow::*;
 
 struct App {}
 
