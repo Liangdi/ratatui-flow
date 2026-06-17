@@ -1,12 +1,16 @@
 //! Interactive TUI: a complex compiler-pipeline node graph that is bigger
 //! than the screen, with keyboard-driven viewport scrolling.
 //!
-//! The library itself has no viewport yet, so this example implements one at
-//! the application layer: the whole graph is rendered **once** into a large
-//! off-screen `Buffer` (the "canvas"), and each frame we blit the visible
-//! window — offset by `App::scroll` — onto the terminal. Scrolling is just
-//! changing that offset and re-blitting; the expensive layout/routing never
-//! re-runs per frame.
+//! This uses the library's native viewport API: the whole graph is laid out
+//! **once** into an off-screen canvas (during `NodeGraph::calculate`), and each
+//! frame we:
+//!   1. ask the graph for each node's *screen-coordinate* content rect via
+//!      `split_viewport`, and render our own content widget into it;
+//!   2. render the `NodeGraphView` widget, which blits the scrolled window of
+//!      the canvas (borders / ports / connections) onto the terminal.
+//!
+//! Scrolling is just changing the `Viewport` offset and redrawing; the
+//! expensive layout/routing never re-runs per frame.
 //!
 //! Controls: `←→↑↓` or `hjkl` to scroll · `PgUp`/`PgDn` · `Home` reset ·
 //! `q`/`Esc` quit.
@@ -16,14 +20,15 @@ use std::time::Duration;
 
 use crossterm::event::{self, Event, KeyCode, KeyEventKind};
 use crossterm::execute;
-use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
+use crossterm::terminal::{
+	EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
+};
 use ratatui::{
-	backend::CrosstermBackend,
-	buffer::Buffer,
-	layout::{Position, Rect},
-	style::{Color, Modifier, Style},
-	widgets::{BorderType, Paragraph, StatefulWidget, Widget},
 	Frame, Terminal,
+	backend::CrosstermBackend,
+	layout::Rect,
+	style::{Color, Modifier, Style},
+	widgets::{BorderType, Paragraph},
 };
 use ratatui_flow::*;
 
@@ -35,8 +40,8 @@ const CANVAS_H: u16 = 110;
 // A 16-node compiler pipeline: source → parse → analyze → optimize → backend.
 // Nodes vary in size (via `from_content`) on purpose.
 const TITLES: [&str; 16] = [
-	"src_scan", "manifest", "read", "lex", "parse", "hir", "typeck", "borrow", "lint", "mir",
-	"inline", "dce", "codegen", "llvm_opt", "emit_obj", "link",
+	"src_scan", "manifest", "read", "lex", "parse", "hir", "typeck", "borrow", "lint",
+	"mir", "inline", "dce", "codegen", "llvm_opt", "emit_obj", "link",
 ];
 const CONTENTS: [&str; 16] = [
 	"src_scan\nsrc/**/*.rs\nfound 42 files",
@@ -59,18 +64,18 @@ const CONTENTS: [&str; 16] = [
 
 // (from_node, from_port, to_node, to_port) — a multi-branch / multi-join DAG.
 const EDGES: [(usize, usize, usize, usize); 18] = [
-	(0, 0, 2, 0),  // src_scan -> read
-	(1, 0, 2, 1),  // manifest -> read
-	(2, 0, 3, 0),  // read     -> lex
-	(3, 0, 4, 0),  // lex      -> parse
-	(4, 0, 5, 0),  // parse    -> hir
-	(5, 0, 6, 0),  // hir      -> typeck
-	(5, 1, 7, 0),  // hir      -> borrow
-	(6, 0, 8, 0),  // typeck   -> lint
-	(7, 0, 8, 1),  // borrow   -> lint
-	(6, 1, 9, 0),  // typeck   -> mir
-	(7, 1, 9, 1),  // borrow   -> mir
-	(9, 0, 10, 0), // mir      -> inline
+	(0, 0, 2, 0),   // src_scan -> read
+	(1, 0, 2, 1),   // manifest -> read
+	(2, 0, 3, 0),   // read     -> lex
+	(3, 0, 4, 0),   // lex      -> parse
+	(4, 0, 5, 0),   // parse    -> hir
+	(5, 0, 6, 0),   // hir      -> typeck
+	(5, 1, 7, 0),   // hir      -> borrow
+	(6, 0, 8, 0),   // typeck   -> lint
+	(7, 0, 8, 1),   // borrow   -> lint
+	(6, 1, 9, 0),   // typeck   -> mir
+	(7, 1, 9, 1),   // borrow   -> mir
+	(9, 0, 10, 0),  // mir      -> inline
 	(10, 0, 11, 0), // inline  -> dce
 	(8, 0, 12, 0),  // lint    -> codegen
 	(11, 0, 12, 1), // dce     -> codegen
@@ -83,12 +88,12 @@ const EDGE_COLORS: [Color; 6] =
 	[Color::Green, Color::Yellow, Color::Blue, Color::Magenta, Color::Cyan, Color::Red];
 
 struct App {
-	canvas: Buffer,
-	scroll: (u16, u16),
+	graph: NodeGraph<'static>,
+	viewport: Viewport,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-	let canvas = build_canvas();
+	let graph = build_graph();
 
 	// enter raw mode + alternate screen; the guard restores on drop (and panic)
 	enable_raw_mode()?;
@@ -97,7 +102,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let _guard = TerminalGuard;
 	let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
 
-	let mut app = App { canvas, scroll: (0, 0) };
+	let mut app = App { graph, viewport: Viewport::new() };
 	run_app(&mut terminal, &mut app)?;
 	Ok(())
 }
@@ -111,12 +116,10 @@ impl Drop for TerminalGuard {
 	}
 }
 
-/// Lay the whole graph out once and render it into a big off-screen buffer.
-/// This runs a single time; scrolling never re-runs it.
-fn build_canvas() -> Buffer {
-	let rect = Rect { x: 0, y: 0, width: CANVAS_W, height: CANVAS_H };
-	let mut buf = Buffer::empty(rect);
-
+/// Build the 16-node graph and run layout/routing once. The resulting off-screen
+/// canvas (borders/ports/connections) lives inside the `NodeGraph`; scrolling
+/// never re-runs this.
+fn build_graph() -> NodeGraph<'static> {
 	let nodes: Vec<NodeLayout> = TITLES
 		.iter()
 		.zip(CONTENTS.iter())
@@ -131,26 +134,14 @@ fn build_canvas() -> Buffer {
 		.iter()
 		.enumerate()
 		.map(|(i, &(f, fp, t, tp))| {
-			Connection::new(f, fp, t, tp)
+			Connection::new(f.into(), fp.into(), t.into(), tp.into())
 				.with_line_style(Style::default().fg(EDGE_COLORS[i % EDGE_COLORS.len()]))
 		})
 		.collect();
 
 	let mut graph = NodeGraph::new(nodes, conns, CANVAS_W as usize, CANVAS_H as usize);
 	graph.calculate();
-
-	// node contents first, then borders/ports/connections on top
-	let zones = graph.split(rect);
-	for (idx, zone) in zones.iter().enumerate() {
-		if idx < CONTENTS.len() {
-			Paragraph::new(CONTENTS[idx])
-				.style(Style::default().add_modifier(Modifier::BOLD))
-				.render(*zone, &mut buf);
-		}
-	}
-	graph.render(rect, &mut buf, &mut ());
-
-	buf
+	graph
 }
 
 fn run_app(
@@ -171,13 +162,28 @@ fn run_app(
 			let max = max_scroll((sz.width, sz.height), (CANVAS_W, CANVAS_H));
 			match key.code {
 				KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
-				KeyCode::Left | KeyCode::Char('h') => app.scroll.0 = app.scroll.0.saturating_sub(3),
-				KeyCode::Right | KeyCode::Char('l') => app.scroll.0 = app.scroll.0.saturating_add(3).min(max.0),
-				KeyCode::Up | KeyCode::Char('k') => app.scroll.1 = app.scroll.1.saturating_sub(1),
-				KeyCode::Down | KeyCode::Char('j') => app.scroll.1 = app.scroll.1.saturating_add(1).min(max.1),
-				KeyCode::PageUp => app.scroll.1 = app.scroll.1.saturating_sub(10),
-				KeyCode::PageDown => app.scroll.1 = app.scroll.1.saturating_add(10).min(max.1),
-				KeyCode::Home => app.scroll = (0, 0),
+				KeyCode::Left | KeyCode::Char('h') => {
+					app.viewport.offset.0 = app.viewport.offset.0.saturating_sub(3)
+				}
+				KeyCode::Right | KeyCode::Char('l') => {
+					app.viewport.offset.0 =
+						app.viewport.offset.0.saturating_add(3).min(max.0)
+				}
+				KeyCode::Up | KeyCode::Char('k') => {
+					app.viewport.offset.1 = app.viewport.offset.1.saturating_sub(1)
+				}
+				KeyCode::Down | KeyCode::Char('j') => {
+					app.viewport.offset.1 =
+						app.viewport.offset.1.saturating_add(1).min(max.1)
+				}
+				KeyCode::PageUp => {
+					app.viewport.offset.1 = app.viewport.offset.1.saturating_sub(10)
+				}
+				KeyCode::PageDown => {
+					app.viewport.offset.1 =
+						app.viewport.offset.1.saturating_add(10).min(max.1)
+				}
+				KeyCode::Home => app.viewport = Viewport::new(),
 				_ => {}
 			}
 		}
@@ -202,30 +208,28 @@ fn ui(f: &mut Frame, app: &App) {
 		height: area.height.saturating_sub(status_h),
 	};
 
-	// blit the visible window of the canvas onto the screen
-	for vy in 0..view.height {
-		for vx in 0..view.width {
-			let sx = app.scroll.0.saturating_add(vx);
-			let sy = app.scroll.1.saturating_add(vy);
-			if sx >= CANVAS_W || sy >= CANVAS_H {
-				continue;
-			}
-			let src = match app.canvas.cell(Position::new(sx, sy)) {
-				Some(c) => c,
-				None => continue,
-			};
-			if let Some(dst) = f.buffer_mut().cell_mut(Position::new(view.x + vx, view.y + vy)) {
-				dst.set_symbol(src.symbol());
-				dst.set_style(src.style());
-			}
+	// 1. node contents — screen-coordinate rects, clipped to the visible view
+	let bold = Style::default().add_modifier(Modifier::BOLD);
+	let zones = app.graph.split_viewport(view, &app.viewport);
+	for (i, z) in zones.iter().enumerate() {
+		if i < CONTENTS.len() && z.width > 0 && z.height > 0 {
+			f.render_widget(Paragraph::new(CONTENTS[i]).style(bold), *z);
 		}
 	}
 
+	// 2. borders / ports / connections — blit the scrolled window of the canvas
+	f.render_widget(NodeGraphView::new(&app.graph).viewport(app.viewport), view);
+
 	// status bar (stays fixed regardless of scroll)
-	let status = Rect { x: area.x, y: view.bottom(), width: area.width, height: status_h };
+	let status = Rect {
+		x: area.x,
+		y: view.bottom(),
+		width: area.width,
+		height: status_h,
+	};
 	let msg = format!(
 		" viewport=({}, {})  canvas={}x{}  \u{2190}\u{2192}\u{2191}\u{2193}/hjkl scroll · PgUp/PgDn · Home=reset · q/Esc=quit ",
-		app.scroll.0, app.scroll.1, CANVAS_W, CANVAS_H
+		app.viewport.offset.0, app.viewport.offset.1, CANVAS_W, CANVAS_H
 	);
 	f.render_widget(
 		Paragraph::new(msg).style(Style::default().add_modifier(Modifier::REVERSED)),

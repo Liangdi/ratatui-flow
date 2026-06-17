@@ -1,6 +1,9 @@
+use ratatui::buffer::Buffer;
 use ratatui::layout::Position;
+use ratatui::widgets::Widget;
 
 use super::*;
+use crate::id::{NodeId, PortId};
 
 const MARGIN: u16 = 5;
 
@@ -8,9 +11,14 @@ const MARGIN: u16 = 5;
 pub struct NodeGraph<'a> {
 	nodes: Vec<NodeLayout<'a>>,
 	connections: Vec<Connection>,
-	placements: Map<usize, Rect>,
+	placements: Map<NodeId, Rect>,
 	conn_layout: ConnectionsLayout,
 	width: usize,
+	height: usize,
+	/// Off-screen canvas holding the full graph's borders/ports/connections
+	/// (no node *content*) after [`calculate`][Self::calculate]. Used by
+	/// [`NodeGraphView`] to blit the visible window onto the screen.
+	canvas: Buffer,
 	/// Non-fatal problems detected during the last [`calculate`][Self::calculate]
 	/// (unreachable nodes, ignored bad connections, unrouted connections).
 	/// Cleared at the start of each `calculate`.
@@ -24,14 +32,31 @@ impl<'a> NodeGraph<'a> {
 		width: usize,
 		height: usize,
 	) -> Self {
+		let canvas = Buffer::empty(Rect {
+			x: 0,
+			y: 0,
+			width: width as u16,
+			height: height as u16,
+		});
 		Self {
 			nodes,
 			connections,
 			conn_layout: ConnectionsLayout::new(width, height),
 			placements: Default::default(),
 			width,
+			height,
+			canvas,
 			diagnostics: Vec::new(),
 		}
+	}
+
+	/// The full-graph canvas (borders/ports/connections only, no content)
+	/// rendered during [`calculate`][Self::calculate]. Width/height match the
+	/// values passed to [`new`][Self::new].
+	///
+	/// Exposed so [`NodeGraphView`] can blit a scrolled window from it.
+	pub(crate) fn canvas(&self) -> &Buffer {
+		&self.canvas
 	}
 
 	pub fn calculate(&mut self) {
@@ -48,7 +73,7 @@ impl<'a> NodeGraph<'a> {
 			.copied()
 			.filter(|ea| {
 				let n = self.nodes.len();
-				if ea.from_node >= n || ea.to_node >= n {
+				if ea.from_node.0 as usize >= n || ea.to_node.0 as usize >= n {
 					log::warn!(
 						"skipping connection: node index out of bounds \
 						 (from_node={}, to_node={}, node_count={})",
@@ -68,7 +93,7 @@ impl<'a> NodeGraph<'a> {
 			.collect();
 
 		// find root nodes
-		let mut roots: Set<_> = (0..self.nodes.len()).collect();
+		let mut roots: Set<_> = (0..self.nodes.len()).map(|i| NodeId(i as u32)).collect();
 		for ea_connection in valid_conns.iter() {
 			roots.remove(&ea_connection.from_node);
 		}
@@ -85,15 +110,16 @@ impl<'a> NodeGraph<'a> {
 		// placement, but thats really complicated and i dont wanna deal with that
 		// right now. essentially, adding non-trivial connections nudges nodes,
 		// and nudging nodes nudges existing connections.)
-		let mut conn_map = Map::<(usize, usize), usize>::new();
+		let mut conn_map = Map::<(NodeId, PortId), usize>::new();
 		let mut next_idx = 1;
 		for ea_conn in valid_conns.iter() {
 			// a connection may reference a node that never got placed (e.g. one
 			// that was only reachable through a cycle that broke placement).
 			// skip those defensively instead of indexing into placements.
-			let (Some(&a_pos), Some(&b_pos)) =
-				(self.placements.get(&ea_conn.from_node), self.placements.get(&ea_conn.to_node))
-			else {
+			let (Some(&a_pos), Some(&b_pos)) = (
+				self.placements.get(&ea_conn.from_node),
+				self.placements.get(&ea_conn.to_node),
+			) else {
 				log::warn!(
 					"skipping connection layout: endpoint not placed \
 					 (from_node={}, to_node={})",
@@ -105,8 +131,8 @@ impl<'a> NodeGraph<'a> {
 			// NOTE: don't forget that left and right are swapped.
 			// defensively clamp port offsets so an out-of-range port number
 			// can't draw outside the node's frame.
-			let from_port = clamp_port(ea_conn.from_port, a_pos.height);
-			let to_port = clamp_port(ea_conn.to_port, b_pos.height);
+			let from_port = clamp_port(ea_conn.from_port.0 as usize, a_pos.height);
+			let to_port = clamp_port(ea_conn.to_port.0 as usize, b_pos.height);
 			let a_point = (
 				self.width.saturating_sub(a_pos.left().into()),
 				a_pos.top() as usize + from_port + 1,
@@ -149,11 +175,30 @@ impl<'a> NodeGraph<'a> {
 		// any node that never got a placement is unreachable (not on any root's
 		// upstream chain — e.g. a pure cycle or an isolated node). record it.
 		for idx in 0..self.nodes.len() {
-			if !self.placements.contains_key(&idx) {
-				log::warn!("unreachable node not placed (node={idx})");
-				self.diagnostics.push(Diagnostic::UnplacedNode { node: idx });
+			let node_id = NodeId(idx as u32);
+			if !self.placements.contains_key(&node_id) {
+				log::warn!("unreachable node not placed (node={})", node_id);
+				self.diagnostics.push(Diagnostic::UnplacedNode { node: node_id });
 			}
 		}
+
+		// Re-render the whole graph's borders/ports/connections (no node
+		// *content*) into the off-screen canvas. This runs once per layout; the
+		// viewport widget then just blits a scrolled window from it each frame
+		// instead of re-laying-out.
+		//
+		// Render into a fresh local buffer first, then assign: `render_to` borrows
+		// `&self` (for nodes/placements/connections), so we can't hand it
+		// `&mut self.canvas` at the same time.
+		let canvas_rect = Rect {
+			x: 0,
+			y: 0,
+			width: self.width as u16,
+			height: self.height as u16,
+		};
+		let mut canvas = Buffer::empty(canvas_rect);
+		self.render_to(canvas_rect, &mut canvas);
+		self.canvas = canvas;
 	}
 
 	/// Non-fatal problems detected during the most recent
@@ -171,11 +216,11 @@ impl<'a> NodeGraph<'a> {
 	/// down)
 	fn place_node(
 		&mut self,
-		idx_node: usize,
+		idx_node: NodeId,
 		x: u16,
 		y: u16,
-		main_chain: &mut Vec<usize>,
-		visited: &mut Set<usize>,
+		main_chain: &mut Vec<NodeId>,
+		visited: &mut Set<NodeId>,
 		conns: &[Connection],
 	) {
 		// cycle guard: if this node was already placed (reachable again through
@@ -186,7 +231,7 @@ impl<'a> NodeGraph<'a> {
 		}
 
 		// place the node
-		let size_me = self.nodes[idx_node].size;
+		let size_me = self.nodes[idx_node.0 as usize].size;
 		let mut rect_me = Rect { x, y, width: size_me.0, height: size_me.1 };
 
 		// nudge placement. if a node intersects with another node, its entire
@@ -249,9 +294,9 @@ impl<'a> NodeGraph<'a> {
 
 	fn nudge(
 		&mut self,
-		idx_node: usize,
+		idx_node: NodeId,
 		x: u16,
-		in_progress: &mut Set<usize>,
+		in_progress: &mut Set<NodeId>,
 		conns: &[Connection],
 	) {
 		// cycle guard: break only if this node is already on the current
@@ -268,7 +313,12 @@ impl<'a> NodeGraph<'a> {
 				// the child must already be placed for nudging to make sense;
 				// skip defensively if not.
 				if self.placements.contains_key(&ea_child.from_node) {
-					self.nudge(ea_child.from_node, x + rect_me.width + MARGIN, in_progress, conns);
+					self.nudge(
+						ea_child.from_node,
+						x + rect_me.width + MARGIN,
+						in_progress,
+						conns,
+					);
 				}
 			}
 		}
@@ -279,7 +329,7 @@ impl<'a> NodeGraph<'a> {
 		(0..self.nodes.len())
 			.map(|idx_node| {
 				self.placements
-					.get(&idx_node)
+					.get(&NodeId(idx_node as u32))
 					.map(|pos| {
 						if pos.right() > area.width || pos.bottom() > area.height {
 							return Rect { x: 0, y: 0, width: 0, height: 0 };
@@ -293,9 +343,161 @@ impl<'a> NodeGraph<'a> {
 			})
 			.collect()
 	}
+
+	/// Like [`split`][Self::split], but returns each node's content rect in
+	/// **screen** coordinates for a scrolled viewport.
+	///
+	/// Each rect is the node's canvas-rect (mirrored, inner border removed),
+	/// translated by `-viewport.offset + area.origin`, then clipped to `area`.
+	/// A node fully scrolled off-screen yields a 0×0 rect (render it only when
+	/// `width > 0 && height > 0`).
+	///
+	/// Typical per-frame usage:
+	/// ```ignore
+	/// let zones = graph.split_viewport(view_area, &viewport);
+	/// for (i, z) in zones.iter().enumerate() {
+	///     if z.width > 0 && z.height > 0 {
+	///         f.render_widget(my_content[i], *z);
+	///     }
+	/// }
+	/// f.render_widget(NodeGraphView::new(&graph).viewport(viewport), view_area);
+	/// ```
+	pub fn split_viewport(&self, area: Rect, viewport: &Viewport) -> Vec<Rect> {
+		let canvas_rect = Rect {
+			x: 0,
+			y: 0,
+			width: self.width as u16,
+			height: self.height as u16,
+		};
+		let (ox, oy) = viewport.offset;
+		self.split(canvas_rect)
+			.into_iter()
+			.map(|z| {
+				// A node whose entire rect sits above/left of the viewport
+				// (canvas right edge <= offset.x, or bottom edge <= offset.y) is
+				// fully scrolled off and must become 0×0. `saturating_sub` alone
+				// would clamp it to the screen's top-left edge and keep its size,
+				// wrongly painting a partial node in the corner — so detect that
+				// case first.
+				if z.right() <= ox || z.bottom() <= oy {
+					return Rect::default();
+				}
+				let mut z = z;
+				// translate canvas-coord rect to screen coordinates: subtract the
+				// viewport offset, then add the screen area's origin.
+				z.x = z.x.saturating_sub(ox).saturating_add(area.x);
+				z.y = z.y.saturating_sub(oy).saturating_add(area.y);
+				// clip to the visible area; `intersection` returns a 0×0 rect when
+				// the node is fully off the far edge.
+				z.intersection(area)
+			})
+			.collect()
+	}
 }
 
-fn get_upstream(conns: &[Connection], idx_node: usize) -> Vec<Connection> {
+/// Scroll position into a [`NodeGraph`]'s canvas.
+///
+/// `offset` is the (x, y) coordinate of the viewport's top-left corner within
+/// the off-screen canvas. (0, 0) shows the top-left of the graph; increasing x
+/// scrolls right, increasing y scrolls down.
+///
+/// Pass it to [`NodeGraph::split_viewport`] (for node content rects) and
+/// [`NodeGraphView`] (for borders/connections).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Viewport {
+	/// Top-left corner of the viewport in canvas coordinates.
+	pub offset: (u16, u16),
+}
+
+impl Viewport {
+	/// Create a viewport at offset (0, 0) (top-left of the canvas).
+	pub fn new() -> Self {
+		Self::default()
+	}
+
+	/// Set the viewport's top-left offset in canvas coordinates.
+	#[must_use]
+	pub fn offset(mut self, x: u16, y: u16) -> Self {
+		self.offset = (x, y);
+		self
+	}
+}
+
+impl std::fmt::Display for Viewport {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		write!(f, "Viewport({}, {})", self.offset.0, self.offset.1)
+	}
+}
+
+/// A read-only [`Widget`] that renders a scrolled window of a [`NodeGraph`]'s
+/// borders/ports/connections (no node *content*).
+///
+/// The full graph is rendered once into an off-screen canvas during
+/// [`NodeGraph::calculate`]; this widget blits the visible window (determined
+/// by its [`Viewport`]) onto the frame each draw. Render your own node content
+/// into the rects from [`NodeGraph::split_viewport`] separately.
+///
+/// ```ignore
+/// f.render_widget(NodeGraphView::new(&graph).offset(x, y), area);
+/// ```
+pub struct NodeGraphView<'a> {
+	graph: &'a NodeGraph<'a>,
+	viewport: Viewport,
+}
+
+impl<'a> NodeGraphView<'a> {
+	/// Create a view over `graph` at offset (0, 0).
+	pub fn new(graph: &'a NodeGraph<'a>) -> Self {
+		Self { graph, viewport: Viewport::default() }
+	}
+
+	/// Set the viewport (offset into the canvas).
+	#[must_use]
+	pub fn viewport(mut self, viewport: Viewport) -> Self {
+		self.viewport = viewport;
+		self
+	}
+
+	/// Convenience: set the viewport offset directly (x, y).
+	#[must_use]
+	pub fn offset(mut self, x: u16, y: u16) -> Self {
+		self.viewport.offset = (x, y);
+		self
+	}
+}
+
+impl Widget for NodeGraphView<'_> {
+	fn render(self, area: Rect, buf: &mut Buffer) {
+		let canvas = self.graph.canvas();
+		let (ox, oy) = self.viewport.offset;
+		// blit the visible window of the canvas onto `area`, cell by cell.
+		// for each screen cell, look up the canvas cell at (offset + screen-delta)
+		// and copy its symbol + style. out-of-canvas cells are skipped.
+		for vy in 0..area.height {
+			for vx in 0..area.width {
+				let sx = ox.saturating_add(vx);
+				let sy = oy.saturating_add(vy);
+				let src = match canvas.cell(Position::new(sx, sy)) {
+					Some(c) => c,
+					None => continue,
+				};
+				// Blank canvas cells are node content areas / background — leave
+				// them untouched so content the caller rendered into the
+				// `split_viewport` rects shows through. Only copy cells the canvas
+				// actually drew (borders / ports / connections).
+				if src.symbol() == " " {
+					continue;
+				}
+				if let Some(dst) = buf.cell_mut(Position::new(area.x + vx, area.y + vy)) {
+					dst.set_symbol(src.symbol());
+					dst.set_style(src.style());
+				}
+			}
+		}
+	}
+}
+
+fn get_upstream(conns: &[Connection], idx_node: NodeId) -> Vec<Connection> {
 	// find children and order them
 	let mut upstream: Vec<_> =
 		conns.iter().filter(|ea| ea.to_node == idx_node).copied().collect();
@@ -303,7 +505,7 @@ fn get_upstream(conns: &[Connection], idx_node: usize) -> Vec<Connection> {
 	upstream
 }
 
-fn get_downstream(conns: &[Connection], idx_node: usize) -> Vec<Connection> {
+fn get_downstream(conns: &[Connection], idx_node: NodeId) -> Vec<Connection> {
 	// find parents and order them
 	let mut downstream: Vec<_> =
 		conns.iter().filter(|ea| ea.from_node == idx_node).copied().collect();
@@ -321,17 +523,23 @@ fn clamp_port(port: usize, node_height: u16) -> usize {
 	port.min(max)
 }
 
-impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
-	// eventually, this will contain stuff like view position
-	//	type State = NodeGraphState;
-	type State = ();
-
-	fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
+impl<'a> NodeGraph<'a> {
+	/// Render the graph's borders/ports/connections (but *not* node content)
+	/// into `buf` at `area`. This is the shared implementation behind both the
+	/// [`StatefulWidget`] impl (used by `split`-based rendering) and the
+	/// off-screen canvas drawn during [`calculate`][Self::calculate] (used by
+	/// [`NodeGraphView`]).
+	///
+	/// Takes `&self` (rather than consuming the widget) so the same graph can
+	/// be rendered multiple times — once into the canvas during layout, and
+	/// any number of times via the `StatefulWidget` impl for non-viewport use.
+	pub(crate) fn render_to(&self, area: Rect, buf: &mut Buffer) {
 		// draw connections
 		self.conn_layout.render(area, buf);
 
 		// draw nodes
-		'node: for (idx_node, ea_node) in self.nodes.into_iter().enumerate() {
+		'node: for (idx_node, ea_node) in self.nodes.iter().enumerate() {
+			let idx_node = NodeId(idx_node as u32);
 			if let Some(mut pos) = self.placements.get(&idx_node).copied() {
 				if pos.right() > area.width || pos.bottom() > area.height {
 					continue 'node;
@@ -344,7 +552,8 @@ impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 				// draw connection ports
 				for ea_conn in get_upstream(&self.connections, idx_node) {
 					// clamp port so the offset stays within the node frame
-					let to_port = clamp_port(ea_conn.to_port, pos.height) as u16;
+					let to_port =
+						clamp_port(ea_conn.to_port.0 as usize, pos.height) as u16;
 					// draw connection alias
 					if let Some(alias_char) = self.conn_layout.alias_connections.get(&(
 						true,
@@ -352,19 +561,21 @@ impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 						ea_conn.to_port,
 					)) {
 						let y = pos.top() + to_port + 1;
-						if pos.left() > 0 && y < area.height {
-							if let Some(cell) = buf.cell_mut(Position::new(pos.left() - 1, y)) {
-								cell.set_symbol(alias_char).set_style(
-									Style::default()
-										.add_modifier(Modifier::BOLD)
-										.bg(Color::Red),
-								);
-							}
+						if pos.left() > 0
+							&& y < area.height && let Some(cell) =
+							buf.cell_mut(Position::new(pos.left() - 1, y))
+						{
+							cell.set_symbol(alias_char).set_style(
+								Style::default()
+									.add_modifier(Modifier::BOLD)
+									.bg(Color::Red),
+							);
 						}
 					}
 
 					// draw port
-					if let Some(cell) = buf.cell_mut(Position::new(pos.left(), pos.top() + to_port + 1))
+					if let Some(cell) =
+						buf.cell_mut(Position::new(pos.left(), pos.top() + to_port + 1))
 					{
 						cell.set_symbol(conn_symbol(
 							true,
@@ -375,21 +586,19 @@ impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 				}
 				for ea_conn in get_downstream(&self.connections, idx_node) {
 					// clamp port so the offset stays within the node frame
-					let from_port = clamp_port(ea_conn.from_port, pos.height) as u16;
+					let from_port =
+						clamp_port(ea_conn.from_port.0 as usize, pos.height) as u16;
 					// draw connection alias
 					if let Some(alias_char) = self.conn_layout.alias_connections.get(&(
 						false,
 						idx_node,
 						ea_conn.from_port,
-					)) {
-						if let Some(cell) =
-							buf.cell_mut(Position::new(pos.right(), pos.top() + from_port + 1))
-						{
-							cell.set_symbol(alias_char)
-								.set_style(
-									Style::default().add_modifier(Modifier::BOLD).bg(Color::Red),
-								);
-						}
+					)) && let Some(cell) = buf
+						.cell_mut(Position::new(pos.right(), pos.top() + from_port + 1))
+					{
+						cell.set_symbol(alias_char).set_style(
+							Style::default().add_modifier(Modifier::BOLD).bg(Color::Red),
+						);
 					}
 
 					// draw port
@@ -407,11 +616,21 @@ impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 			} else {
 				buf.set_string(
 					0,
-					idx_node as u16,
-					format!("{idx_node}"),
+					idx_node.0 as u16,
+					format!("{}", idx_node.0),
 					Style::default(),
 				);
 			}
 		}
+	}
+}
+
+impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
+	// eventually, this will contain stuff like view position
+	//	type State = NodeGraphState;
+	type State = ();
+
+	fn render(self, area: Rect, buf: &mut Buffer, _state: &mut Self::State) {
+		self.render_to(area, buf);
 	}
 }

@@ -5,19 +5,19 @@
 //! behavior fixed in Steps 1 and 2 (cycle detection, out-of-bounds connection
 //! skipping, render-time bounds checks) as a regression net.
 
-use ratatui::{
-	buffer::Buffer,
-	layout::Rect,
-	widgets::StatefulWidget,
-};
+use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
 use ratatui_flow::{Connection, Diagnostic, LineType, NodeGraph, NodeLayout};
+
+/// Shorthand for `Connection::new` with `.into()` so test callsites stay terse
+/// after the NodeId/PortId migration: `c(from, from_port, to, to_port)`.
+fn c(from: usize, from_port: usize, to: usize, to_port: usize) -> Connection {
+	Connection::new(from.into(), from_port.into(), to.into(), to_port.into())
+}
 
 /// Helper: how many of the rects returned by `split` are non-zero-sized
 /// (i.e. the node was actually placed and fits inside `area`).
 fn count_placed(rects: &[Rect]) -> usize {
-	rects.iter()
-		.filter(|r| r.width > 0 && r.height > 0)
-		.count()
+	rects.iter().filter(|r| r.width > 0 && r.height > 0).count()
 }
 
 /// Helper: build a graph, run calculate, render into a buffer of `area`'s size,
@@ -27,7 +27,8 @@ fn build_and_split(
 	connections: Vec<Connection>,
 	area: Rect,
 ) -> (NodeGraph<'_>, Vec<Rect>) {
-	let mut graph = NodeGraph::new(nodes, connections, area.width as usize, area.height as usize);
+	let mut graph =
+		NodeGraph::new(nodes, connections, area.width as usize, area.height as usize);
 	graph.calculate();
 	let rects = graph.split(area);
 	(graph, rects)
@@ -43,13 +44,10 @@ fn build_and_split(
 /// To make node 0 the root (rightmost), 0 must be a `to_node` only.
 /// Connection `new(from=1, to=0)` means "1 feeds into 0", so 1 is a child of 0.
 fn linear_chain_3() -> (Vec<NodeLayout<'static>>, Vec<Connection>) {
-	let nodes = vec![
-		NodeLayout::new((6, 4)),
-		NodeLayout::new((6, 4)),
-		NodeLayout::new((6, 4)),
-	];
+	let nodes =
+		vec![NodeLayout::new((6, 4)), NodeLayout::new((6, 4)), NodeLayout::new((6, 4))];
 	// 2 -> 1 -> 0: node 0 is root, 1 is child of 0, 2 is child of 1.
-	let connections = vec![Connection::new(1, 0, 0, 0), Connection::new(2, 0, 1, 0)];
+	let connections = vec![c(1, 0, 0, 0), c(2, 0, 1, 0)];
 	(nodes, connections)
 }
 
@@ -67,26 +65,21 @@ fn all_reachable_nodes_are_placed() {
 	let area = Rect::new(0, 0, 60, 20);
 	let (_graph, rects) = build_and_split(nodes, conns, area);
 	let placed = count_placed(&rects);
-	assert_eq!(
-		placed, 3,
-		"all 3 reachable nodes should be placed (got {placed})"
-	);
+	assert_eq!(placed, 3, "all 3 reachable nodes should be placed (got {placed})");
 }
 
 #[test]
 fn placed_node_rects_do_not_intersect() {
 	// A small fan-out DAG: root 0, children 1 and 2 both fed into 0.
-	let nodes = vec![
-		NodeLayout::new((8, 5)),
-		NodeLayout::new((8, 5)),
-		NodeLayout::new((8, 5)),
-	];
+	let nodes =
+		vec![NodeLayout::new((8, 5)), NodeLayout::new((8, 5)), NodeLayout::new((8, 5))];
 	// 1 -> 0, 2 -> 0  => 0 is root; 1 and 2 are its children (stacked vertically).
-	let connections = vec![Connection::new(1, 0, 0, 0), Connection::new(2, 0, 0, 1)];
+	let connections = vec![c(1, 0, 0, 0), c(2, 0, 0, 1)];
 	let area = Rect::new(0, 0, 80, 30);
 	let (_graph, rects) = build_and_split(nodes, connections, area);
 
-	let placed: Vec<Rect> = rects.into_iter().filter(|r| r.width > 0 && r.height > 0).collect();
+	let placed: Vec<Rect> =
+		rects.into_iter().filter(|r| r.width > 0 && r.height > 0).collect();
 	assert!(placed.len() >= 2, "expected at least 2 placed nodes");
 
 	// No two placed rects may overlap. `Rect::intersects` is symmetric and
@@ -119,7 +112,7 @@ fn unreachable_node_is_not_placed() {
 		NodeLayout::new((6, 4)), // 1: root
 		NodeLayout::new((6, 4)), // 2: unreachable (self-loop only)
 	];
-	let connections = vec![Connection::new(2, 0, 2, 0)]; // 2 -> 2 self-loop
+	let connections = vec![c(2, 0, 2, 0)]; // 2 -> 2 self-loop
 	let area = Rect::new(0, 0, 60, 20);
 	let (_graph, rects) = build_and_split(nodes, connections, area);
 
@@ -128,11 +121,7 @@ fn unreachable_node_is_not_placed() {
 	let placed2 = rects[2].width > 0 && rects[2].height > 0;
 	assert!(placed0, "root node 0 should be placed");
 	assert!(placed1, "root node 1 should be placed");
-	assert!(
-		!placed2,
-		"unreachable node 2 should NOT be placed (rect={:?})",
-		rects[2]
-	);
+	assert!(!placed2, "unreachable node 2 should NOT be placed (rect={:?})", rects[2]);
 }
 
 // ===========================================================================
@@ -153,9 +142,9 @@ fn root_reachable_cycle_does_not_panic_on_calculate() {
 		NodeLayout::new((6, 4)), // B
 	];
 	let connections = vec![
-		Connection::new(1, 0, 0, 0), // A -> R
-		Connection::new(2, 0, 1, 0), // B -> A
-		Connection::new(1, 0, 2, 0), // A -> B  (closes A<->B cycle)
+		c(1, 0, 0, 0), // A -> R
+		c(2, 0, 1, 0), // B -> A
+		c(1, 0, 2, 0), // A -> B  (closes A<->B cycle)
 	];
 	let area = Rect::new(0, 0, 60, 20);
 
@@ -176,16 +165,9 @@ fn root_reachable_cycle_does_not_panic_on_calculate() {
 fn root_reachable_cycle_does_not_panic_on_render() {
 	// Same cycle topology as above, but also exercise render into a Buffer to
 	// make sure the connection-layout pass doesn't choke on cycle nodes.
-	let nodes = vec![
-		NodeLayout::new((6, 4)),
-		NodeLayout::new((6, 4)),
-		NodeLayout::new((6, 4)),
-	];
-	let connections = vec![
-		Connection::new(1, 0, 0, 0),
-		Connection::new(2, 0, 1, 0),
-		Connection::new(1, 0, 2, 0),
-	];
+	let nodes =
+		vec![NodeLayout::new((6, 4)), NodeLayout::new((6, 4)), NodeLayout::new((6, 4))];
+	let connections = vec![c(1, 0, 0, 0), c(2, 0, 1, 0), c(1, 0, 2, 0)];
 	let area = Rect::new(0, 0, 40, 15);
 	let mut graph =
 		NodeGraph::new(nodes, connections, area.width as usize, area.height as usize);
@@ -205,8 +187,8 @@ fn out_of_bounds_connection_from_node_skipped() {
 	// 2 nodes (indices 0,1). Connection references from_node=5 (>= len).
 	let nodes = vec![NodeLayout::new((6, 4)), NodeLayout::new((6, 4))];
 	let connections = vec![
-		Connection::new(1, 0, 0, 0), // valid: 1 -> 0
-		Connection::new(5, 0, 0, 1), // INVALID from_node=5
+		c(1, 0, 0, 0), // valid: 1 -> 0
+		c(5, 0, 0, 1), // INVALID from_node=5
 	];
 	let area = Rect::new(0, 0, 40, 15);
 	// Must not panic.
@@ -222,8 +204,8 @@ fn out_of_bounds_connection_from_node_skipped() {
 fn out_of_bounds_connection_to_node_skipped() {
 	let nodes = vec![NodeLayout::new((6, 4)), NodeLayout::new((6, 4))];
 	let connections = vec![
-		Connection::new(1, 0, 0, 0), // valid
-		Connection::new(0, 0, 9, 0), // INVALID to_node=9
+		c(1, 0, 0, 0), // valid
+		c(0, 0, 9, 0), // INVALID to_node=9
 	];
 	let area = Rect::new(0, 0, 40, 15);
 	let mut graph =
@@ -239,10 +221,7 @@ fn all_connections_out_of_bounds_still_no_panic() {
 	// Every connection is invalid; graph should still calculate (placing all
 	// nodes as roots) without panicking.
 	let nodes = vec![NodeLayout::new((6, 4)), NodeLayout::new((6, 4))];
-	let connections = vec![
-		Connection::new(10, 0, 11, 0),
-		Connection::new(99, 0, 0, 0),
-	];
+	let connections = vec![c(10, 0, 11, 0), c(99, 0, 0, 0)];
 	let area = Rect::new(0, 0, 40, 15);
 	let mut graph =
 		NodeGraph::new(nodes, connections, area.width as usize, area.height as usize);
@@ -278,10 +257,7 @@ fn render_canvas_sized_graph_into_smaller_buffer_no_panic() {
 		NodeLayout::new((14, 6)),
 		NodeLayout::new((14, 6)),
 	];
-	let connections = vec![
-		Connection::new(1, 0, 0, 0),
-		Connection::new(2, 0, 1, 0),
-	];
+	let connections = vec![c(1, 0, 0, 0), c(2, 0, 1, 0)];
 	// Layout canvas is large; render buffer is small.
 	let canvas = Rect::new(0, 0, 60, 20);
 	let render_area = Rect::new(0, 0, 20, 10);
@@ -301,7 +277,8 @@ fn render_single_node_into_one_cell_buffer_no_panic() {
 	let nodes = vec![NodeLayout::new((10, 6))];
 	let canvas = Rect::new(0, 0, 40, 20);
 	let render_area = Rect::new(0, 0, 1, 1);
-	let mut graph = NodeGraph::new(nodes, vec![], canvas.width as usize, canvas.height as usize);
+	let mut graph =
+		NodeGraph::new(nodes, vec![], canvas.width as usize, canvas.height as usize);
 	graph.calculate();
 
 	let mut buf = Buffer::empty(render_area);
@@ -315,9 +292,14 @@ fn render_nodes_outside_buffer_bounds_are_skipped() {
 	// slice (must not panic; out-of-canvas nodes are skipped).
 	let mk_graph = || {
 		let nodes = vec![NodeLayout::new((8, 5)), NodeLayout::new((8, 5))];
-		let connections = vec![Connection::new(1, 0, 0, 0)];
+		let connections = vec![c(1, 0, 0, 0)];
 		let canvas = Rect::new(0, 0, 60, 20);
-		let mut g = NodeGraph::new(nodes, connections, canvas.width as usize, canvas.height as usize);
+		let mut g = NodeGraph::new(
+			nodes,
+			connections,
+			canvas.width as usize,
+			canvas.height as usize,
+		);
 		g.calculate();
 		g
 	};
@@ -328,7 +310,8 @@ fn render_nodes_outside_buffer_bounds_are_skipped() {
 	let blank = Buffer::empty(canvas);
 	let g_full = mk_graph();
 	g_full.render(canvas, &mut full_buf, &mut ());
-	let drawable = full_buf.content().iter().zip(blank.content().iter()).any(|(a, b)| a != b);
+	let drawable =
+		full_buf.content().iter().zip(blank.content().iter()).any(|(a, b)| a != b);
 	assert!(drawable, "graph should draw into a full-canvas buffer");
 
 	// Now render into a tiny slice; must not panic.
@@ -355,20 +338,18 @@ fn content_fixture_graph() -> NodeGraph<'static> {
 		"Sink\nINSERT INTO events\nON CONFLICT\nDO NOTHING",
 	];
 
-	let nodes: Vec<NodeLayout<'static>> = CONTENTS
-		.iter()
-		.map(|c| NodeLayout::from_content(c))
-		.collect();
+	let nodes: Vec<NodeLayout<'static>> =
+		CONTENTS.iter().map(|c| NodeLayout::from_content(c)).collect();
 
 	// Same connection set as the example.
 	let connections = vec![
-		Connection::new(0, 0, 1, 0),
-		Connection::new(0, 0, 2, 0),
-		Connection::new(1, 0, 3, 0).with_line_type(LineType::Double),
-		Connection::new(2, 0, 3, 1),
-		Connection::new(3, 0, 4, 0),
-		Connection::new(3, 1, 5, 0).with_line_type(LineType::Double),
-		Connection::new(4, 0, 5, 1),
+		c(0, 0, 1, 0),
+		c(0, 0, 2, 0),
+		c(1, 0, 3, 0).with_line_type(LineType::Double),
+		c(2, 0, 3, 1),
+		c(3, 0, 4, 0),
+		c(3, 1, 5, 0).with_line_type(LineType::Double),
+		c(4, 0, 5, 1),
 	];
 
 	NodeGraph::new(nodes, connections, 120, 24)
@@ -394,7 +375,8 @@ fn content_fixture_node_rects_are_disjoint() {
 	graph.calculate();
 	let area = Rect::new(0, 0, 120, 24);
 	let rects = graph.split(area);
-	let placed: Vec<Rect> = rects.into_iter().filter(|r| r.width > 0 && r.height > 0).collect();
+	let placed: Vec<Rect> =
+		rects.into_iter().filter(|r| r.width > 0 && r.height > 0).collect();
 	assert_eq!(placed.len(), 6);
 	for i in 0..placed.len() {
 		for j in (i + 1)..placed.len() {
@@ -457,7 +439,7 @@ fn render_draws_node_frame_into_buffer() {
 #[test]
 fn calculate_with_canvas_smaller_than_placement_no_panic() {
 	let nodes = vec![NodeLayout::new((40, 10)), NodeLayout::new((40, 10))];
-	let conns = vec![Connection::new(0, 0, 1, 0)];
+	let conns = vec![c(0, 0, 1, 0)];
 	// canvas 20x10, but nodes are 40 wide -> placed beyond canvas width.
 	let mut graph = NodeGraph::new(nodes, conns, 20, 10);
 	// Reaching this line without panicking is the assertion.
@@ -470,7 +452,7 @@ fn calculate_with_canvas_smaller_than_placement_no_panic() {
 #[test]
 fn small_canvas_calculate_and_render_no_panic() {
 	let nodes = vec![NodeLayout::new((40, 10)), NodeLayout::new((40, 10))];
-	let conns = vec![Connection::new(0, 0, 1, 0)];
+	let conns = vec![c(0, 0, 1, 0)];
 	let mut graph = NodeGraph::new(nodes, conns, 20, 10);
 	graph.calculate();
 
@@ -520,17 +502,14 @@ fn diagnostics_reports_unreachable_node() {
 		NodeLayout::new((6, 4)), // 2: unreachable (self-loop only)
 	];
 	// 0 -> 1 (reachable chain) and 2 -> 2 (orphan self-loop).
-	let connections = vec![
-		Connection::new(0, 0, 1, 0),
-		Connection::new(2, 0, 2, 0),
-	];
+	let connections = vec![c(0, 0, 1, 0), c(2, 0, 2, 0)];
 	let area = Rect::new(0, 0, 60, 20);
 	let mut graph =
 		NodeGraph::new(nodes, connections, area.width as usize, area.height as usize);
 	graph.calculate();
 
 	assert!(
-		graph.diagnostics().contains(&Diagnostic::UnplacedNode { node: 2 }),
+		graph.diagnostics().contains(&Diagnostic::UnplacedNode { node: 2usize.into() }),
 		"expected UnplacedNode {{ node: 2 }} in diagnostics, got {:?}",
 		graph.diagnostics(),
 	);
@@ -543,9 +522,9 @@ fn diagnostics_reports_invalid_connection() {
 	let nodes = vec![NodeLayout::new((6, 4)), NodeLayout::new((6, 4))];
 	// Valid 0 -> 1, plus an invalid from_node=5 and an invalid to_node=9.
 	let connections = vec![
-		Connection::new(0, 0, 1, 0), // valid
-		Connection::new(5, 0, 0, 1), // INVALID from_node=5
-		Connection::new(0, 0, 9, 0), // INVALID to_node=9
+		c(0, 0, 1, 0), // valid
+		c(5, 0, 0, 1), // INVALID from_node=5
+		c(0, 0, 9, 0), // INVALID to_node=9
 	];
 	let area = Rect::new(0, 0, 40, 15);
 	let mut graph =
@@ -554,11 +533,17 @@ fn diagnostics_reports_invalid_connection() {
 
 	let diags = graph.diagnostics();
 	assert!(
-		diags.contains(&Diagnostic::InvalidConnectionRef { from_node: 5, to_node: 0 }),
+		diags.contains(&Diagnostic::InvalidConnectionRef {
+			from_node: 5usize.into(),
+			to_node: 0usize.into()
+		}),
 		"expected InvalidConnectionRef {{ from_node: 5, to_node: 0 }}, got {diags:?}",
 	);
 	assert!(
-		diags.contains(&Diagnostic::InvalidConnectionRef { from_node: 0, to_node: 9 }),
+		diags.contains(&Diagnostic::InvalidConnectionRef {
+			from_node: 0usize.into(),
+			to_node: 9usize.into()
+		}),
 		"expected InvalidConnectionRef {{ from_node: 0, to_node: 9 }}, got {diags:?}",
 	);
 }
@@ -568,13 +553,10 @@ fn diagnostics_reports_invalid_connection() {
 /// on the second must report an empty slice after the second run.
 #[test]
 fn diagnostics_cleared_between_calculate_calls() {
-	let nodes = vec![
-		NodeLayout::new((6, 4)),
-		NodeLayout::new((6, 4)),
-		NodeLayout::new((6, 4)),
-	];
+	let nodes =
+		vec![NodeLayout::new((6, 4)), NodeLayout::new((6, 4)), NodeLayout::new((6, 4))];
 	// First run: invalid connection -> non-empty diagnostics.
-	let conns_dirty = vec![Connection::new(9, 0, 0, 0)];
+	let conns_dirty = vec![c(9, 0, 0, 0)];
 	let area = Rect::new(0, 0, 40, 15);
 	let mut graph =
 		NodeGraph::new(nodes, conns_dirty, area.width as usize, area.height as usize);
@@ -584,12 +566,9 @@ fn diagnostics_cleared_between_calculate_calls() {
 	// Second run: valid chain 0 -> 1 -> 2, all reachable, no bad refs.
 	// (`self.connections` is fixed at construction, so we rebuild a clean graph
 	// of the same shape to demonstrate the clear-on-recalculate behavior.)
-	let nodes2 = vec![
-		NodeLayout::new((6, 4)),
-		NodeLayout::new((6, 4)),
-		NodeLayout::new((6, 4)),
-	];
-	let conns_clean = vec![Connection::new(0, 0, 1, 0), Connection::new(1, 0, 2, 0)];
+	let nodes2 =
+		vec![NodeLayout::new((6, 4)), NodeLayout::new((6, 4)), NodeLayout::new((6, 4))];
+	let conns_clean = vec![c(0, 0, 1, 0), c(1, 0, 2, 0)];
 	let mut graph2 =
 		NodeGraph::new(nodes2, conns_clean, area.width as usize, area.height as usize);
 	graph2.calculate();
@@ -616,22 +595,210 @@ fn diagnostics_cleared_between_calculate_calls() {
 #[test]
 fn diagnostics_reports_routing_failed() {
 	let nodes = vec![NodeLayout::new((4, 4)), NodeLayout::new((4, 4))];
-	let conns = vec![Connection::new(0, 0, 1, 0)];
+	let conns = vec![c(0, 0, 1, 0)];
 	// 8x4 canvas: both nodes occupy the full height and together span the width,
 	// leaving no room to route between their ports.
 	let mut graph = NodeGraph::new(nodes, conns, 8, 4);
 	graph.calculate();
 
 	assert!(
-		graph
-			.diagnostics()
-			.contains(&Diagnostic::RoutingFailed {
-				from_node: 0,
-				from_port: 0,
-				to_node: 1,
-				to_port: 0,
-			}),
+		graph.diagnostics().contains(&Diagnostic::RoutingFailed {
+			from_node: 0usize.into(),
+			from_port: 0usize.into(),
+			to_node: 1usize.into(),
+			to_port: 0usize.into(),
+		}),
 		"expected RoutingFailed for the 0->1 connection on a fully-packed canvas, got {:?}",
 		graph.diagnostics(),
 	);
+}
+
+// ===========================================================================
+// H. Viewport API: `Viewport`, `split_viewport`, and the `NodeGraphView` widget
+// ===========================================================================
+//
+// The viewport API renders the whole graph once into an off-screen canvas
+// during `calculate`, then exposes:
+//   - `split_viewport(area, &Viewport)` -> per-node screen-coordinate content
+//     rects (translated by the offset, clipped to `area`);
+//   - `NodeGraphView` -> a `Widget` that blits the scrolled window of the
+//     canvas (borders/ports/connections) onto a frame.
+//
+// These tests pin that contract: offset translation, clipping of off-screen
+// nodes, and that the widget's offset actually changes its output.
+
+use ratatui::layout::Position;
+use ratatui::widgets::Widget as RatatuiWidget;
+use ratatui_flow::{NodeGraphView, Viewport};
+
+/// A simple linear 3-node chain (0 root, 1 child, 2 grandchild) used by the
+/// viewport tests. Built on a comfortably large canvas so all nodes place.
+fn viewport_chain_graph() -> NodeGraph<'static> {
+	let nodes = vec![
+		NodeLayout::new((10, 5)),
+		NodeLayout::new((10, 5)),
+		NodeLayout::new((10, 5)),
+	];
+	// 2 -> 1 -> 0: node 0 is root.
+	let connections = vec![c(1, 0, 0, 0), c(2, 0, 1, 0)];
+	let mut graph = NodeGraph::new(nodes, connections, 60, 20);
+	graph.calculate();
+	graph
+}
+
+/// With offset (0,0) and an `area` equal to the canvas size,
+/// `split_viewport` must match `split(canvas)` exactly (the viewport adds no
+/// translation in that case).
+#[test]
+fn split_viewport_zero_offset_matches_split_on_canvas() {
+	let graph = viewport_chain_graph();
+	let canvas = Rect::new(0, 0, 60, 20);
+	let vp = Viewport::new(); // offset (0,0)
+
+	let plain = graph.split(canvas);
+	let via_viewport = graph.split_viewport(canvas, &vp);
+
+	assert_eq!(
+		plain, via_viewport,
+		"zero-offset split_viewport must equal split on the same canvas-sized area"
+	);
+}
+
+/// A non-zero x offset must shift each visible node's content rect to the left
+/// relative to the zero-offset case, by exactly the offset (before clipping).
+/// Here we pick an area wide enough that the nodes stay fully visible at both
+/// offsets, so clipping doesn't muddy the comparison.
+#[test]
+fn split_viewport_offset_shifts_rects() {
+	let graph = viewport_chain_graph();
+	// Use the full canvas as the view so nothing is clipped at small offsets.
+	let canvas = Rect::new(0, 0, 60, 20);
+
+	let vp_zero = Viewport::new();
+	let vp_shift = Viewport::new().offset(10, 0);
+
+	let rects_zero = graph.split_viewport(canvas, &vp_zero);
+	let rects_shift = graph.split_viewport(canvas, &vp_shift);
+
+	// Every node is placed (3-node chain, big canvas).
+	let placed_zero: Vec<Rect> =
+		rects_zero.into_iter().filter(|r| r.width > 0 && r.height > 0).collect();
+	let placed_shift: Vec<Rect> =
+		rects_shift.into_iter().filter(|r| r.width > 0 && r.height > 0).collect();
+	assert_eq!(placed_zero.len(), 3, "all 3 nodes placed at zero offset");
+	assert_eq!(placed_shift.len(), 3, "all 3 nodes placed at offset (10,0)");
+
+	// Pair them by index (same node order) and check the x shift.
+	for (z, s) in placed_zero.iter().zip(placed_shift.iter()) {
+		// Scrolling right by 10 moves the canvas content 10 cells to the left,
+		// i.e. each node's screen x decreases by 10. We compare left edges.
+		let shift = z.x.saturating_sub(s.x);
+		// Allow exactly 10 (full shift) — anything else means the offset wasn't
+		// applied as a plain translation.
+		assert_eq!(
+			shift, 10,
+			"offset(10,0) should shift x left by 10: zero={z:?} shift={s:?}"
+		);
+		// y is unaffected by an x-only offset.
+		assert_eq!(z.y, s.y, "y must not change for an x-only offset");
+		// width/height are preserved (no clipping here since the canvas is the view).
+		assert_eq!(z.width, s.width);
+		assert_eq!(z.height, s.height);
+	}
+}
+
+/// An offset larger than the canvas pushes every node off the top-left of the
+/// view, so every returned rect must be 0×0.
+#[test]
+fn split_viewport_clips_invisible_nodes() {
+	let graph = viewport_chain_graph();
+	let canvas = Rect::new(0, 0, 60, 20);
+
+	// Offset past the far edge of the canvas: nothing is visible.
+	let vp = Viewport::new().offset(200, 200);
+	let rects = graph.split_viewport(canvas, &vp);
+
+	for (i, r) in rects.iter().enumerate() {
+		assert_eq!(
+			(r.width, r.height),
+			(0, 0),
+			"node {i} should be fully clipped (0×0) at a huge offset, got {r:?}"
+		);
+	}
+}
+
+/// Rendering a `NodeGraphView` into a buffer must not panic, regardless of offset.
+#[test]
+fn node_graph_view_renders_without_panic() {
+	let graph = viewport_chain_graph();
+	let area = Rect::new(0, 0, 40, 15);
+
+	// Zero offset.
+	let mut buf = Buffer::empty(area);
+	NodeGraphView::new(&graph).render(area, &mut buf);
+
+	// Non-zero offset that stays partly on-canvas.
+	let mut buf2 = Buffer::empty(area);
+	NodeGraphView::new(&graph).offset(5, 3).render(area, &mut buf2);
+
+	// Huge offset (everything off-canvas): still must not panic.
+	let mut buf3 = Buffer::empty(area);
+	NodeGraphView::new(&graph).offset(999, 999).render(area, &mut buf3);
+}
+
+/// Two different offsets must produce different buffers — proving the offset
+/// is actually honored by the blit (not silently ignored).
+#[test]
+fn node_graph_view_offset_changes_output() {
+	let graph = viewport_chain_graph();
+	let area = Rect::new(0, 0, 40, 15);
+	let blank = Buffer::empty(area);
+
+	let mut buf_a = Buffer::empty(area);
+	NodeGraphView::new(&graph).offset(0, 0).render(area, &mut buf_a);
+
+	let mut buf_b = Buffer::empty(area);
+	NodeGraphView::new(&graph).offset(8, 4).render(area, &mut buf_b);
+
+	// Sanity: at least one of them actually drew something (the canvas has
+	// node borders/connections, so a zero-offset view over a placed graph is
+	// non-blank).
+	let a_drawn = buf_a.content().iter().zip(blank.content().iter()).any(|(x, y)| x != y);
+	assert!(a_drawn, "zero-offset view should draw the graph (non-blank)");
+
+	// The two offsets must differ somewhere.
+	let differ = buf_a.content().iter().zip(buf_b.content().iter()).any(|(x, y)| x != y);
+	assert!(
+		differ,
+		"offset (0,0) vs (8,4) must produce different buffer contents (offset had no effect)"
+	);
+}
+
+/// `NodeGraphView` should also render without panic when its `area` is smaller
+/// than the canvas (the common real terminal case). Confirms the blit's
+/// out-of-canvas guard works for the partial-overlap window.
+#[test]
+fn node_graph_view_renders_into_area_smaller_than_canvas() {
+	let graph = viewport_chain_graph();
+	// canvas is 60x20; render into a 20x10 window with a small offset.
+	let area = Rect::new(0, 0, 20, 10);
+	let mut buf = Buffer::empty(area);
+	NodeGraphView::new(&graph).offset(3, 2).render(area, &mut buf);
+
+	// Confirm at least one cell came from the canvas (graph is drawn in the
+	// top-left of the canvas, so a small offset reveals it).
+	let blank = Buffer::empty(area);
+	let drawn = buf.content().iter().zip(blank.content().iter()).any(|(x, y)| x != y);
+	assert!(drawn, "expected the view to blit some canvas content into the small area");
+
+	// Also exercise the `.viewport(Viewport)` builder path to make sure the
+	// public builder API compiles and runs, and that it matches `.offset(x,y)`.
+	let mut buf2 = Buffer::empty(area);
+	let vp = Viewport::new().offset(3, 2);
+	NodeGraphView::new(&graph).viewport(vp).render(area, &mut buf2);
+	let same = buf.content().iter().zip(buf2.content().iter()).all(|(x, y)| x == y);
+	assert!(same, ".viewport(vp) and .offset(x,y) builders must produce the same output");
+
+	// Touch a Position read to keep the import used and document the cell API.
+	let _ = buf2.cell(Position::new(0, 0)).is_some();
 }

@@ -1,6 +1,6 @@
 // boilerplate from from tui-rs examples
 
-use ratatui::{backend::CrosstermBackend, Frame, Terminal};
+use ratatui::{Frame, Terminal, backend::CrosstermBackend};
 
 use ratatui_flow::*;
 
@@ -35,9 +35,9 @@ fn ui(f: &mut Frame, _app: &App) {
 			NodeLayout::new((40, 10)).with_title("c"),
 		],
 		vec![
-			Connection::new(0, 0, 1, 0),
-			Connection::new(0, 0, 2, 0),
-			Connection::new(1, 0, 2, 1),
+			Connection::new(0usize.into(), 0usize.into(), 1usize.into(), 0usize.into()),
+			Connection::new(0usize.into(), 0usize.into(), 2usize.into(), 0usize.into()),
+			Connection::new(1usize.into(), 0usize.into(), 2usize.into(), 1usize.into()),
 		],
 		space.width as usize,
 		space.height as usize,
@@ -51,9 +51,24 @@ fn ui(f: &mut Frame, _app: &App) {
 				NodeLayout::new((2, 4)),
 			],
 			vec![
-				Connection::new(0, 0, 1, 0),
-				Connection::new(0, 0, 2, 0),
-				Connection::new(1, 0, 2, 1),
+				Connection::new(
+					0usize.into(),
+					0usize.into(),
+					1usize.into(),
+					0usize.into(),
+				),
+				Connection::new(
+					0usize.into(),
+					0usize.into(),
+					2usize.into(),
+					0usize.into(),
+				),
+				Connection::new(
+					1usize.into(),
+					0usize.into(),
+					2usize.into(),
+					1usize.into(),
+				),
 			],
 			ea_zone.width as usize,
 			ea_zone.height as usize,

@@ -1,11 +1,11 @@
+use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
-use criterion::{criterion_group, criterion_main, Criterion};
 
-use ratatui_flow::*;
 use ratatui::{
-	widgets::BorderType,
 	style::{Color, Style},
+	widgets::BorderType,
 };
+use ratatui_flow::*;
 
 fn tiny(c: &mut Criterion) {
 	let mut graph = NodeGraph::new(
@@ -19,19 +19,22 @@ fn tiny(c: &mut Criterion) {
 			NodeLayout::new((4, 4)).with_border_type(BorderType::Double),
 		],
 		vec![
-			Connection::new(0, 0, 1, 0).with_line_type(LineType::Double), // a | b
-			Connection::new(1, 0, 2, 0)
+			Connection::new(0usize.into(), 0usize.into(), 1usize.into(), 0usize.into())
+				.with_line_type(LineType::Double), // a | b
+			Connection::new(1usize.into(), 0usize.into(), 2usize.into(), 0usize.into())
 				.with_line_type(LineType::Thick)
 				.with_line_style(Style::default().fg(Color::Red)), // b | c
-			Connection::new(3, 0, 2, 1).with_line_type(LineType::Double), // d > c
-			Connection::new(4, 0, 3, 0),                                  // e | d
-			Connection::new(4, 0, 0, 1),                                  // e | d
-			Connection::new(5, 0, 1, 1),                                  // f > b
-			Connection::new(5, 0, 4, 1)
+			Connection::new(3usize.into(), 0usize.into(), 2usize.into(), 1usize.into())
+				.with_line_type(LineType::Double), // d > c
+			Connection::new(4usize.into(), 0usize.into(), 3usize.into(), 0usize.into()), // e | d
+			Connection::new(4usize.into(), 0usize.into(), 0usize.into(), 1usize.into()), // e | d
+			Connection::new(5usize.into(), 0usize.into(), 1usize.into(), 1usize.into()), // f > b
+			Connection::new(5usize.into(), 0usize.into(), 4usize.into(), 1usize.into())
 				.with_line_type(LineType::Thick)
 				.with_line_style(Style::default().fg(Color::Red)), // f > e
-			Connection::new(6, 0, 0, 0),                                  // g | a
-			Connection::new(6, 0, 5, 0).with_line_type(LineType::Double), // g | f
+			Connection::new(6usize.into(), 0usize.into(), 0usize.into(), 0usize.into()), // g | a
+			Connection::new(6usize.into(), 0usize.into(), 5usize.into(), 0usize.into())
+				.with_line_type(LineType::Double), // g | f
 		],
 		54,
 		10,
@@ -41,7 +44,6 @@ fn tiny(c: &mut Criterion) {
 }
 
 fn basic(c: &mut Criterion) {
-
 	let mut graph = NodeGraph::new(
 		vec![
 			NodeLayout::new((40, 10))
@@ -67,15 +69,20 @@ fn basic(c: &mut Criterion) {
 				.with_border_type(BorderType::Double),
 		],
 		vec![
-			Connection::new(0, 0, 1, 0).with_line_type(LineType::Double), // a | b
-			Connection::new(1, 0, 2, 0).with_line_type(LineType::Thick),  // b | c
-			Connection::new(3, 0, 2, 1).with_line_type(LineType::Double), // d > c
-			Connection::new(4, 0, 3, 0),                                  // e | d
-			Connection::new(4, 0, 0, 1),                                  // e | d
-			Connection::new(5, 0, 1, 1),                                  // f > b
-			Connection::new(5, 0, 4, 6),                                  // f > e
-			Connection::new(6, 0, 0, 0).with_line_type(LineType::Double), // g | a
-			Connection::new(6, 0, 5, 0).with_line_type(LineType::Double), // g | f
+			Connection::new(0usize.into(), 0usize.into(), 1usize.into(), 0usize.into())
+				.with_line_type(LineType::Double), // a | b
+			Connection::new(1usize.into(), 0usize.into(), 2usize.into(), 0usize.into())
+				.with_line_type(LineType::Thick), // b | c
+			Connection::new(3usize.into(), 0usize.into(), 2usize.into(), 1usize.into())
+				.with_line_type(LineType::Double), // d > c
+			Connection::new(4usize.into(), 0usize.into(), 3usize.into(), 0usize.into()), // e | d
+			Connection::new(4usize.into(), 0usize.into(), 0usize.into(), 1usize.into()), // e | d
+			Connection::new(5usize.into(), 0usize.into(), 1usize.into(), 1usize.into()), // f > b
+			Connection::new(5usize.into(), 0usize.into(), 4usize.into(), 6usize.into()), // f > e
+			Connection::new(6usize.into(), 0usize.into(), 0usize.into(), 0usize.into())
+				.with_line_type(LineType::Double), // g | a
+			Connection::new(6usize.into(), 0usize.into(), 5usize.into(), 0usize.into())
+				.with_line_type(LineType::Double), // g | f
 		],
 		250,
 		100,

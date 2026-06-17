@@ -23,7 +23,8 @@
 - **连接自动布线**：基于网格搜索，每条连接可单独设置线型 / 颜色 / 样式。
 - **节点按内容自适应尺寸**：`NodeLayout::from_content` 按文本显示宽度计算（通过 `unicode-width`，正确处理 CJK / emoji 等宽字符）。
 - **优雅降级**：环、越界的节点引用、过小的画布都不会 panic，而是优雅处理并通过 `Diagnostic` 上报。
-- **最小化、封闭的公共 API**：`NodeGraph`、`NodeLayout`、`Connection`、`LineType`（外加 `Diagnostic`）；内部布局类型不对外暴露。
+- **最小化、封闭的公共 API**：`NodeGraph`、`NodeGraphView`、`Viewport`、`NodeLayout`、`Connection`、`LineType`（外加 `Diagnostic`）；内部布局类型不对外暴露。
+- **原生视口 / 滚动**：图在 `calculate()` 时一次性渲染到离屏 canvas，之后用 `NodeGraphView`（blit 滚动窗口）+ `split_viewport`（拿节点内容的屏幕坐标 rect）即可平移/滚动，无需每帧重算布局。
 
 ## 快速开始
 
@@ -43,7 +44,8 @@ let nodes = vec![
     NodeLayout::from_content("Source\n/data/input.csv").with_title("src"),
     NodeLayout::from_content("Sink\nINSERT INTO events").with_title("out"),
 ];
-let conns = vec![Connection::new(0, 0, 1, 0)];
+// from/to 用稳定身份 NodeId/PortId(usize 可 .into() 隐式转换)
+let conns = vec![Connection::new(0.into(), 0.into(), 1.into(), 0.into())];
 
 let mut graph = NodeGraph::new(nodes, conns, 120, 24);
 graph.calculate();
@@ -74,7 +76,37 @@ cargo run --example basic      # 最小示例
 cargo run --example tiny       # 渲染到缓冲区并打印
 ```
 
-`viewport` 演示了应用层的视口实现：把整张图一次性渲染到一个大的离屏 buffer，每帧只 blit 滚动后可见的那一块（库本身暂未内置视口）。操作：`hjkl` / 方向键滚动、`PgUp`/`PgDn`、`Home`、`q`/`Esc` 退出。
+`viewport` 演示了库原生的视口 API：`NodeGraphView`（blit 滚动后的边框/端口/连线）+ `split_viewport`（拿节点内容的屏幕坐标 rect）。整张图在 `calculate()` 时渲染到离屏 canvas 一次，之后滚动只是改 `Viewport` 的 offset。操作：`hjkl` / 方向键滚动、`PgUp`/`PgDn`、`Home`、`q`/`Esc` 退出。
+
+## 视口 / 滚动
+
+当图比屏幕大时，用库原生的视口 API。整张图（边框/端口/连线，不含节点内容）在 `calculate()` 时一次性渲染到内部离屏 canvas；之后每帧只需：
+
+1. `split_viewport(area, &viewport)` 拿到每个节点内容的**屏幕坐标** rect（已按 offset 平移并裁剪到 `area`；不可见为 0×0）；
+2. 渲染 `NodeGraphView`（把 canvas 的可见窗口按 offset blit 到屏幕）。
+
+```rust
+use ratatui::widgets::{Paragraph, Widget};
+use ratatui_flow::{NodeGraph, NodeGraphView, Viewport};
+
+// 图比屏幕大；calculate() 时整图画到离屏 canvas 一次
+let mut graph = NodeGraph::new(nodes, conns, 220, 110);
+graph.calculate();
+
+let mut viewport = Viewport::new();   // offset = (0, 0)
+// ... 事件循环里按方向键改 viewport.offset.0 / .1 ...
+
+// 每帧：
+let zones = graph.split_viewport(view_area, &viewport);
+for (i, z) in zones.iter().enumerate() {
+    if z.width > 0 && z.height > 0 {
+        f.render_widget(Paragraph::new(contents[i]), *z);   // 你自己渲染节点内容
+    }
+}
+f.render_widget(NodeGraphView::new(&graph).viewport(viewport), view_area);  // 边框/连线
+```
+
+`NodeGraphView` 持有 `&graph`，所以不需要每帧 clone 图；布局/布线从不重算。
 
 ## 诊断
 
@@ -90,7 +122,9 @@ cargo run --example tiny       # 渲染到缓冲区并打印
 
 | 条目 | 用途 |
 |---|---|
-| `NodeGraph` | 持有节点 + 连接；`new` / `calculate` / `split` / `diagnostics` + 实现 ratatui `StatefulWidget`。 |
+| `NodeGraph` | 持有节点 + 连接；`new` / `calculate` / `split` / `split_viewport` / `diagnostics` + 实现 ratatui `StatefulWidget`。`calculate()` 时整图（边框/端口/连线）渲染到内部离屏 canvas。 |
+| `NodeGraphView` | 一个 ratatui `Widget`：按 `Viewport` 的 offset 把 canvas 的可见窗口 blit 到屏幕（仅边框/端口/连线，不含节点内容）。 |
+| `Viewport` | 视口在 canvas 中的左上角 offset `(x, y)`；传给 `split_viewport` 与 `NodeGraphView`。 |
 | `NodeLayout` | 单个节点的渲染信息；`new((w,h))` 或 `from_content(text)` + builder。 |
 | `Connection` | `new(from_node, from_port, to_node, to_port)` + `with_line_type` / `with_line_style`。 |
 | `LineType` | `Plain` / `Rounded` / `Double` / `Thick`。 |

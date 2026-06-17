@@ -42,11 +42,7 @@ impl<'a> NodeLayout<'a> {
 	/// Display width uses `unicode-width`, so wide (e.g. CJK) and zero-width
 	/// characters are measured correctly.
 	pub fn from_content(content: &str) -> Self {
-		let inner_w = content
-			.lines()
-			.map(UnicodeWidthStr::width)
-			.max()
-			.unwrap_or(0);
+		let inner_w = content.lines().map(UnicodeWidthStr::width).max().unwrap_or(0);
 		let inner_h = content.lines().count();
 		Self::new((inner_w.saturating_add(2) as u16, inner_h.saturating_add(2) as u16))
 	}

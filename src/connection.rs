@@ -7,6 +7,8 @@ use ratatui::{
 };
 use std::collections::{BTreeMap as Map, BinaryHeap};
 
+use crate::id::{NodeId, PortId};
+
 const SEARCH_TIMEOUT: usize = 5000;
 
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,15 +39,12 @@ impl From<BorderType> for LineType {
 			BorderType::Double => LineType::Double,
 			BorderType::Thick => LineType::Thick,
 			BorderType::LightDoubleDashed
-				| BorderType::LightTripleDashed
-				| BorderType::LightQuadrupleDashed
-				=> LineType::Plain,
+			| BorderType::LightTripleDashed
+			| BorderType::LightQuadrupleDashed => LineType::Plain,
 			BorderType::HeavyDoubleDashed
-				| BorderType::HeavyTripleDashed
-				| BorderType::HeavyQuadrupleDashed
-				=> LineType::Thick,
-			BorderType::QuadrantInside | BorderType::QuadrantOutside
-				=> LineType::Plain,
+			| BorderType::HeavyTripleDashed
+			| BorderType::HeavyQuadrupleDashed => LineType::Thick,
+			BorderType::QuadrantInside | BorderType::QuadrantOutside => LineType::Plain,
 		}
 	}
 }
@@ -98,20 +97,20 @@ impl std::fmt::Debug for Direction {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Connection {
-	pub(crate) from_node: usize,
-	pub(crate) from_port: usize,
-	pub(crate) to_node: usize,
-	pub(crate) to_port: usize,
+	pub(crate) from_node: NodeId,
+	pub(crate) from_port: PortId,
+	pub(crate) to_node: NodeId,
+	pub(crate) to_port: PortId,
 	line_type: LineType,
 	line_style: Style,
 }
 
 impl Connection {
 	pub fn new(
-		from_node: usize,
-		from_port: usize,
-		to_node: usize,
-		to_port: usize,
+		from_node: NodeId,
+		from_port: PortId,
+		to_node: NodeId,
+		to_port: PortId,
 	) -> Self {
 		Self {
 			from_node,
@@ -123,19 +122,19 @@ impl Connection {
 		}
 	}
 
-	pub fn from_node(&self) -> usize {
+	pub fn from_node(&self) -> NodeId {
 		self.from_node
 	}
 
-	pub fn from_port(&self) -> usize {
+	pub fn from_port(&self) -> PortId {
 		self.from_port
 	}
 
-	pub fn to_node(&self) -> usize {
+	pub fn to_node(&self) -> NodeId {
 		self.to_node
 	}
 
-	pub fn to_port(&self) -> usize {
+	pub fn to_port(&self) -> PortId {
 		self.to_port
 	}
 
@@ -168,12 +167,22 @@ impl Connection {
 pub enum Diagnostic {
 	/// A node is unreachable (not on any root node's upstream chain — e.g. a pure
 	/// cycle or an isolated node) and was therefore not placed.
-	UnplacedNode { node: usize },
+	UnplacedNode {
+		node: NodeId,
+	},
 	/// A connection referenced an out-of-bounds node index and was ignored.
-	InvalidConnectionRef { from_node: usize, to_node: usize },
+	InvalidConnectionRef {
+		from_node: NodeId,
+		to_node: NodeId,
+	},
 	/// A connection could not be routed (the search timed out or found no path)
 	/// and was downgraded to an alias character for display.
-	RoutingFailed { from_node: usize, from_port: usize, to_node: usize, to_port: usize },
+	RoutingFailed {
+		from_node: NodeId,
+		from_port: PortId,
+		to_node: NodeId,
+		to_port: PortId,
+	},
 }
 
 /// Generate the correct connection symbol for this node
@@ -199,20 +208,20 @@ pub(crate) fn conn_symbol(
 		(BorderType::Double, LineType::Plain | LineType::Rounded) => ("╢", "╟"),
 
 		(
-			BorderType::LightDoubleDashed | BorderType::LightTripleDashed | BorderType::LightQuadrupleDashed,
+			BorderType::LightDoubleDashed
+			| BorderType::LightTripleDashed
+			| BorderType::LightQuadrupleDashed,
 			_,
 		) => ("┤", "├"),
 		(
-			BorderType::HeavyDoubleDashed | BorderType::HeavyTripleDashed | BorderType::HeavyQuadrupleDashed,
+			BorderType::HeavyDoubleDashed
+			| BorderType::HeavyTripleDashed
+			| BorderType::HeavyQuadrupleDashed,
 			_,
 		) => ("┤", "├"),
 		(BorderType::QuadrantInside | BorderType::QuadrantOutside, _) => ("┤", "├"),
 	};
-	if is_input {
-		out.0
-	} else {
-		out.1
-	}
+	if is_input { out.0 } else { out.1 }
 }
 
 pub(crate) const ALIAS_CHARS: [&str; 24] = [
@@ -232,12 +241,12 @@ const B: Edge = Edge::Blocked;
 
 #[derive(Debug)]
 pub(crate) struct ConnectionsLayout {
-	ports: Map<(bool, usize, usize), (usize, usize)>, // (x,y)
-	connections: Vec<(Connection, usize)>,            // ((from, to), class)
+	ports: Map<(bool, NodeId, PortId), (usize, usize)>, // (x,y)
+	connections: Vec<(Connection, usize)>,              // ((from, to), class)
 	edge_field: Betweens<Edge>,
 	width: usize,
 	height: usize,
-	pub(crate) alias_connections: Map<(bool, usize, usize), &'static str>,
+	pub(crate) alias_connections: Map<(bool, NodeId, PortId), &'static str>,
 	line_types: Map<usize, LineType>,
 	line_styles: Map<usize, Style>,
 	/// Routing failures detected during [`calculate`][Self::calculate], drained
@@ -267,8 +276,8 @@ impl ConnectionsLayout {
 	pub(crate) fn insert_port(
 		&mut self,
 		is_input: bool,
-		node: usize,
-		port: usize,
+		node: NodeId,
+		port: PortId,
 		pos: (usize, usize),
 	) {
 		self.ports.insert((is_input, node, port), pos);
@@ -318,10 +327,10 @@ impl ConnectionsLayout {
 				self.ports[&(true, ea_conn.0.to_node, ea_conn.0.to_port)],
 				Direction::East,
 			);
-			if start.0 .0 > self.edge_field.width || start.0 .1 > self.edge_field.height {
+			if start.0.0 > self.edge_field.width || start.0.1 > self.edge_field.height {
 				continue;
 			}
-			if goal.0 .0 > self.edge_field.width || goal.0 .1 > self.edge_field.height {
+			if goal.0.0 > self.edge_field.width || goal.0.1 > self.edge_field.height {
 				continue;
 			}
 			//println!("drawing connection {start:?} to {goal:?}");
@@ -406,7 +415,8 @@ impl ConnectionsLayout {
 						to_port: ea_conn.0.to_port,
 					});
 					// register alias character
-					let alias = *self.alias_connections
+					let alias = *self
+						.alias_connections
 						.entry((false, ea_conn.0.from_node, ea_conn.0.from_port))
 						.or_insert_with(|| {
 							let a = ALIAS_CHARS[idx_next_alias % ALIAS_CHARS.len()];
@@ -552,7 +562,8 @@ impl ConnectionsLayout {
 				let straight = in_is_vert == out_is_vert;
 				if straight {
 					if north == Edge::Empty
-						&& south == Edge::Empty && east == Edge::Empty
+						&& south == Edge::Empty
+						&& east == Edge::Empty
 						&& west == Edge::Empty
 					{
 						2
@@ -562,13 +573,14 @@ impl ConnectionsLayout {
 				} else {
 					// curved
 					if north != Edge::Empty
-						|| south != Edge::Empty || east != Edge::Empty
+						|| south != Edge::Empty
+						|| east != Edge::Empty
 						|| west != Edge::Empty
 					{
 						isize::MAX
 					} else {
-						let ax = current.0 .0 as isize;
-						let ay = current.0 .1 as isize;
+						let ax = current.0.0 as isize;
+						let ay = current.0.1 as isize;
 						let sx = start.0 as isize;
 						let sy = start.1 as isize;
 						let ex = end.0 as isize;
@@ -624,18 +636,14 @@ impl EdgeIdx {
 impl From<((usize, usize), Direction)> for EdgeIdx {
 	fn from(value: ((usize, usize), Direction)) -> Self {
 		match value.1 {
-			Direction::North => Self { x: value.0 .0, y: value.0 .1, is_vertical: true },
-			Direction::South => Self {
-				x: value.0 .0,
-				y: value.0 .1 + 1,
-				is_vertical: true,
-			},
-			Direction::East => Self {
-				x: value.0 .0 + 1,
-				y: value.0 .1,
-				is_vertical: false,
-			},
-			Direction::West => Self { x: value.0 .0, y: value.0 .1, is_vertical: false },
+			Direction::North => Self { x: value.0.0, y: value.0.1, is_vertical: true },
+			Direction::South => {
+				Self { x: value.0.0, y: value.0.1 + 1, is_vertical: true }
+			}
+			Direction::East => {
+				Self { x: value.0.0 + 1, y: value.0.1, is_vertical: false }
+			}
+			Direction::West => Self { x: value.0.0, y: value.0.1, is_vertical: false },
 		}
 	}
 }

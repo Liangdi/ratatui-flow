@@ -10,11 +10,11 @@
 // fixed-size, colored result in any terminal.
 
 use ratatui::{
+	Frame, Terminal, TerminalOptions, Viewport,
 	backend::CrosstermBackend,
 	layout::Rect,
 	style::{Color, Modifier, Style},
 	widgets::{BorderType, Paragraph},
-	Frame, Terminal, TerminalOptions, Viewport,
 };
 use ratatui_flow::*;
 
@@ -37,7 +37,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// fits without `cell_mut` going out of bounds.
 	let mut terminal = Terminal::with_options(
 		backend,
-		TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, 120, 24)) },
+		TerminalOptions {
+			viewport: Viewport::Fixed(Rect::new(0, 0, 120, 24)),
+		},
 	)?;
 
 	terminal.draw(ui)?;
@@ -66,21 +68,26 @@ fn ui(f: &mut Frame) {
 	// appear as a `from_node`, i.e. final outputs) land on the right; the
 	// graph opens leftward toward the sources. One color per connection.
 	let connections = vec![
-		Connection::new(0, 0, 1, 0).with_line_style(Style::default().fg(Color::Green)),  // src   -> parse
-		Connection::new(0, 0, 2, 0).with_line_style(Style::default().fg(Color::Blue)),   // src   -> valid
-		Connection::new(1, 0, 3, 0).with_line_type(LineType::Double).with_line_style(Style::default().fg(Color::Yellow)), // parse -> xform
-		Connection::new(2, 0, 3, 1).with_line_style(Style::default().fg(Color::Cyan)),   // valid -> xform
-		Connection::new(3, 0, 4, 0).with_line_style(Style::default().fg(Color::Magenta)), // xform -> filter
-		Connection::new(3, 1, 5, 0).with_line_type(LineType::Double).with_line_style(Style::default().fg(Color::Red)), // xform -> sink
-		Connection::new(4, 0, 5, 1).with_line_style(Style::default().fg(Color::Cyan)),   // filter-> sink
+		Connection::new(0usize.into(), 0usize.into(), 1usize.into(), 0usize.into())
+			.with_line_style(Style::default().fg(Color::Green)), // src   -> parse
+		Connection::new(0usize.into(), 0usize.into(), 2usize.into(), 0usize.into())
+			.with_line_style(Style::default().fg(Color::Blue)), // src   -> valid
+		Connection::new(1usize.into(), 0usize.into(), 3usize.into(), 0usize.into())
+			.with_line_type(LineType::Double)
+			.with_line_style(Style::default().fg(Color::Yellow)), // parse -> xform
+		Connection::new(2usize.into(), 0usize.into(), 3usize.into(), 1usize.into())
+			.with_line_style(Style::default().fg(Color::Cyan)), // valid -> xform
+		Connection::new(3usize.into(), 0usize.into(), 4usize.into(), 0usize.into())
+			.with_line_style(Style::default().fg(Color::Magenta)), // xform -> filter
+		Connection::new(3usize.into(), 1usize.into(), 5usize.into(), 0usize.into())
+			.with_line_type(LineType::Double)
+			.with_line_style(Style::default().fg(Color::Red)), // xform -> sink
+		Connection::new(4usize.into(), 0usize.into(), 5usize.into(), 1usize.into())
+			.with_line_style(Style::default().fg(Color::Cyan)), // filter-> sink
 	];
 
-	let mut graph = NodeGraph::new(
-		nodes,
-		connections,
-		space.width as usize,
-		space.height as usize,
-	);
+	let mut graph =
+		NodeGraph::new(nodes, connections, space.width as usize, space.height as usize);
 	graph.calculate();
 
 	// render each node's content into its auto-sized rect, then the graph
