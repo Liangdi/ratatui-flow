@@ -372,6 +372,16 @@ pub(crate) struct ConnectionsLayout<'a> {
 	ports: Map<(bool, NodeId, PortId), (usize, usize)>, // (x,y)
 	connections: Vec<(Connection<'a>, usize)>,          // ((from, to), class)
 	edge_field: Betweens<Edge>,
+	/// A* scratch buffers, allocated once in [`new`][Self::new] and reused for
+	/// every connection's route (blanked with a `fill` before each). Replaces
+	/// the per-connection `Betweens::new` that reallocated ~600KB per edge on a
+	/// 250×100 canvas.
+	///
+	/// `came_from` is the predecessor map (`None` == unvisited); `cost` is the
+	/// best-known cost (0 == unvisited). The "unvisited" sentinels are preserved
+	/// exactly by the fill, so routing semantics are unchanged.
+	came_from: Betweens<Option<((usize, usize), Direction)>>,
+	cost: Betweens<isize>,
 	width: usize,
 	height: usize,
 	pub(crate) alias_connections: Map<(bool, NodeId, PortId), &'static str>,
@@ -401,6 +411,8 @@ impl<'a> ConnectionsLayout<'a> {
 			ports: Map::new(),
 			connections: Vec::new(),
 			edge_field: Betweens::new(width, height),
+			came_from: Betweens::new(width, height),
+			cost: Betweens::new(width, height),
 			width,
 			height,
 			alias_connections: Map::new(),
@@ -433,9 +445,9 @@ impl<'a> ConnectionsLayout<'a> {
 		self.label_texts.clear();
 		self.labels.clear();
 		self.diagnostics.clear();
-		// Re-allocate a blank edge field. (OPT-1 flattens `Betweens`, after which
-		// this becomes a single `buf.fill(Edge::default())` memset.)
-		self.edge_field = Betweens::new(self.width, self.height);
+		// Blank the edge field in place (a single memset over the flat
+		// buffer) instead of reallocating.
+		self.edge_field.buf.fill(Edge::default());
 	}
 
 	pub(crate) fn push_connection(&mut self, connection: (Connection<'a>, usize)) {
@@ -521,10 +533,12 @@ impl<'a> ConnectionsLayout<'a> {
 			if goal.0.0 > self.edge_field.width || goal.0.1 > self.edge_field.height {
 				continue;
 			}
-			//println!("drawing connection {start:?} to {goal:?}");
 			let mut frontier = BinaryHeap::new();
-			let mut came_from = Betweens::<Option<_>>::new(self.width, self.height);
-			let mut cost = Betweens::<isize>::new(self.width, self.height);
+			// Reuse the scratch buffers: blank came_from/cost for this route.
+			// `None`/`0` are the "unvisited" sentinels, identical to a fresh
+			// Betweens::new — OPT-2 allocates them once in `new`, not per edge.
+			self.came_from.buf.fill(None);
+			self.cost.buf.fill(0);
 			frontier.push(((0, 0), start));
 			let mut count = 0;
 			while let Some((_, current)) = frontier.pop() {
@@ -537,43 +551,29 @@ impl<'a> ConnectionsLayout<'a> {
 				}
 				for ea_nei in neighbors(current.0, self.width, self.height) {
 					let ea_edge = ea_nei.into();
-					let current_cost = cost[current.into()];
-					//println!("{current_cost}");
-					let new_cost = current_cost.saturating_add(
-						self.calc_cost(current, ea_nei, start.0, goal.0, ea_conn.1),
+					let current_cost = self.cost[current.into()];
+					// Compute cost into a local first: calc_cost borrows
+					// &self.edge_field, while the writes below need &mut
+					// self.cost / self.came_from. Passing edge_field explicitly
+					// (as an associated fn) keeps the borrows on separate fields.
+					let cc = Self::calc_cost(
+						&self.edge_field,
+						current,
+						ea_nei,
+						start.0,
+						goal.0,
+						ea_conn.1,
 					);
-					if came_from[ea_edge].is_none() || new_cost < cost[ea_edge] {
+					let new_cost = current_cost.saturating_add(cc);
+					if self.came_from[ea_edge].is_none() || new_cost < self.cost[ea_edge] {
 						let prio = (-new_cost, -Self::heuristic(ea_nei.0, goal.0));
 						if new_cost != isize::MAX {
 							frontier.push((prio, ea_nei));
 						}
-						came_from[ea_edge] = Some(current);
-						cost[ea_edge] = new_cost;
+						self.came_from[ea_edge] = Some(current);
+						self.cost[ea_edge] = new_cost;
 					}
 				}
-				/*
-				print!("\x1b[2J\x1b[1;1H");
-				println!("{frontier:?}");
-				let mut prio = Betweens::new(self.width, self.height);
-				for ea_front in frontier.iter() {
-					prio[ea_front.1.into()] = ea_front.0;
-				}
-				println!("prio\n");
-				prio.print_with(4, |ea| print!("{:>4} ", ea.0));
-				prio.print_with(4, |ea| print!("{:>4} ", ea.1));
-				println!("cost\n");
-				cost.print_with(4, |ea| print!("{:>4} ", ea));
-				println!("from\n");
-				came_from.print_with(1, |ea| {
-					if let Some(inner) = ea {
-						print!("{:?} ", inner.1);
-					}
-					else {
-						print!("_ ");
-					}
-				});
-				std::io::stdin().read_line(&mut String::new()).unwrap();
-				*/
 			}
 			// first pass: mark connections that didnt reach the goal
 			let mut next = goal;
@@ -581,7 +581,7 @@ impl<'a> ConnectionsLayout<'a> {
 				if next == start {
 					break;
 				}
-				if let Some(from) = came_from[next.into()] {
+				if let Some(from) = self.came_from[next.into()] {
 					next = from;
 				} else {
 					// routing failed (search timed out or found no path):
@@ -628,7 +628,7 @@ impl<'a> ConnectionsLayout<'a> {
 				}
 				seq.push(next.0);
 				self.edge_field[next.into()] = Edge::Connection(ea_conn.1);
-				next = came_from[next.into()].unwrap();
+				next = self.came_from[next.into()].unwrap();
 			}
 			// Record the midpoint for label rendering, but ONLY when this
 			// connection actually has a label — otherwise the map stays empty
@@ -769,7 +769,7 @@ impl<'a> ConnectionsLayout<'a> {
 	}
 
 	fn calc_cost(
-		&self,
+		edge_field: &Betweens<Edge>,
 		current: ((usize, usize), Direction),
 		neigh: ((usize, usize), Direction),
 		start: (usize, usize),
@@ -777,18 +777,18 @@ impl<'a> ConnectionsLayout<'a> {
 		conn_t: usize,
 	) -> isize {
 		let conn_t = Edge::Connection(conn_t);
-		let north = self.edge_field[(current.0, Direction::North).into()];
-		let south = self.edge_field[(current.0, Direction::South).into()];
-		let east = self.edge_field[(current.0, Direction::East).into()];
-		let west = self.edge_field[(current.0, Direction::West).into()];
+		let north = edge_field[(current.0, Direction::North).into()];
+		let south = edge_field[(current.0, Direction::South).into()];
+		let east = edge_field[(current.0, Direction::East).into()];
+		let west = edge_field[(current.0, Direction::West).into()];
 
-		let in_dir = self.edge_field[current.into()];
+		let in_dir = edge_field[current.into()];
 		// TODO: fix
 		if !(in_dir == Edge::Empty || in_dir == conn_t) {
 			return isize::MAX;
 		}
 		//	assert!(in_dir == 0 || in_dir == conn_t); // should only calculate cost if its possible
-		let out_dir = self.edge_field[neigh.into()];
+		let out_dir = edge_field[neigh.into()];
 		if out_dir == conn_t {
 			// already exists
 			1
