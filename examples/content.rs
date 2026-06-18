@@ -47,8 +47,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	drop(terminal);
 	print!("\x1b[2J\x1b[1;1H");
 	print!("{}", std::str::from_utf8(&out)?);
-	// finish with a newline so the shell prompt lands on a fresh line
-	println!();
+	// CR + LF so the prompt lands at column 0 even with ONLCR disabled.
+	print!("\r\n");
 	Ok(())
 }
 

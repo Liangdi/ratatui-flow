@@ -31,7 +31,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	drop(terminal);
 
 	print!("\x1b[2J\x1b[1;1H");
-	println!("{}", std::str::from_utf8(&out).unwrap());
+	print!("{}", std::str::from_utf8(&out).unwrap());
+	// CR + LF so the shell prompt lands at column 0 of a fresh line even on
+	// terminals with ONLCR disabled (crossterm leaves the cursor mid-line).
+	print!("\r\n");
 
 	Ok(())
 }
@@ -74,5 +77,5 @@ fn ui(f: &mut Frame, _app: &App) {
 	for (idx, ea_zone) in zones.into_iter().enumerate() {
 		f.render_widget(Paragraph::new(format!("{idx}")), ea_zone);
 	}
-	f.render_stateful_widget(graph, space, &mut ());
+	f.render_stateful_widget(graph, space, &mut FlowState::default());
 }
