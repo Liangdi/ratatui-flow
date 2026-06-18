@@ -181,7 +181,7 @@ impl<'a> Connection<'a> {
 		self
 	}
 
-	/// The label attached via [`with_label`], or `None` (the default).
+	/// The label attached via `with_label`, or `None` (the default).
 	pub fn label(&self) -> Option<&str> {
 		self.label
 	}
@@ -527,10 +527,14 @@ impl<'a> ConnectionsLayout<'a> {
 				self.ports[&(true, ea_conn.0.to_node, ea_conn.0.to_port)],
 				direction.main_in_direction(),
 			);
-			if start.0.0 > self.edge_field.width || start.0.1 > self.edge_field.height {
+			// `calc_cost` reads all four directions of the start cell, so the
+			// port must be a strict interior cell — coord < width && < height.
+			// Use `>=` (not `>`): a port at coord == width/height is already
+			// off the routable grid and would index `edge_field` out of bounds.
+			if start.0.0 >= self.edge_field.width || start.0.1 >= self.edge_field.height {
 				continue;
 			}
-			if goal.0.0 > self.edge_field.width || goal.0.1 > self.edge_field.height {
+			if goal.0.0 >= self.edge_field.width || goal.0.1 >= self.edge_field.height {
 				continue;
 			}
 			let mut frontier = BinaryHeap::new();

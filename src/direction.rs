@@ -25,7 +25,7 @@ use crate::connection::Direction;
 /// Which way a [`crate::NodeGraph`] flows: the main axis along which children
 /// are laid out away from the root, and which screen edge the root anchors to.
 ///
-/// See the [module docs][self] for the full coordinate model. The default
+/// See the crate-level module docs for the full coordinate model. The default
 /// (`Rtl`) preserves the original hard-coded behavior exactly — roots on the
 /// right, children flowing leftward.
 #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]

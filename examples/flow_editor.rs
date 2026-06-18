@@ -112,12 +112,24 @@ enum Mode {
 	Connect,
 }
 
+/// In-progress left-button drag of a node: which node, plus the offset from the
+/// cursor's canvas position to the node's top-left at grab time (so the node
+/// follows the cursor without snapping its corner to it).
+struct DragState {
+	node: NodeId,
+	/// Canvas-space offset: `(cursor - node_top_left)` at grab time.
+	dx: i32,
+	dy: i32,
+}
+
 struct App {
 	graph: NodeGraph<'static>,
 	/// App-side content per node (the framework stores size/title only).
 	info: Map<NodeId, NodeInfo>,
 	state: FlowState,
 	mode: Mode,
+	/// Active left-button node drag; `None` when idle.
+	drag: Option<DragState>,
 	/// Source node of the in-progress link (CONNECT mode).
 	connect_from: Option<NodeId>,
 	direction: FlowDirection,
@@ -134,13 +146,20 @@ struct App {
 impl App {
 	fn new() -> Self {
 		// Selection highlight: bold magenta (hover gets +DIM from the framework).
+		// Pinned mode: freshly added nodes auto-layout, but any node the user
+		// drags (via `set_position` below) is treated as an immovable anchor and
+		// keeps its place across `calculate()`.
 		let graph = NodeGraph::new(vec![], vec![], CANVAS_W as usize, CANVAS_H as usize)
-			.highlight_style(Style::default().add_modifier(Modifier::BOLD).fg(Color::Magenta));
+			.with_layout_mode(LayoutMode::Pinned)
+			.highlight_style(
+				Style::default().add_modifier(Modifier::BOLD).fg(Color::Magenta),
+			);
 		let mut app = Self {
 			graph,
 			info: Map::new(),
 			state: FlowState::new(),
 			mode: Mode::Normal,
+			drag: None,
 			connect_from: None,
 			direction: FlowDirection::Rtl,
 			show_arrows: false,
@@ -234,7 +253,8 @@ impl App {
 		let color = EDGE_COLORS[self.graph.connections().len() % EDGE_COLORS.len()];
 		let style = Style::default().fg(color);
 		self.graph.add_connection(
-			Connection::new(from, 0usize.into(), to, 0usize.into()).with_line_style(style),
+			Connection::new(from, 0usize.into(), to, 0usize.into())
+				.with_line_style(style),
 		);
 	}
 
@@ -268,7 +288,8 @@ impl App {
 		}
 		let exists = self.graph.has_connection(src, target);
 		if exists {
-			let _ = self.graph.remove_connection(src, 0usize.into(), target, 0usize.into());
+			let _ =
+				self.graph.remove_connection(src, 0usize.into(), target, 0usize.into());
 			self.flash(format!("removed link {} -> {}", src.as_u32(), target.as_u32()));
 		} else if self.reaches(target, src) {
 			// adding src->to would close a cycle (to already reaches src).
@@ -416,8 +437,12 @@ impl App {
 					self.do_link_target(t);
 				}
 			}
-			KeyCode::Char('h') | KeyCode::Left => self.state.pan(-4, 0, canvas, view_size),
-			KeyCode::Char('l') | KeyCode::Right => self.state.pan(4, 0, canvas, view_size),
+			KeyCode::Char('h') | KeyCode::Left => {
+				self.state.pan(-4, 0, canvas, view_size)
+			}
+			KeyCode::Char('l') | KeyCode::Right => {
+				self.state.pan(4, 0, canvas, view_size)
+			}
 			KeyCode::Char('k') | KeyCode::Up => self.state.pan(0, -2, canvas, view_size),
 			KeyCode::Char('j') | KeyCode::Down => self.state.pan(0, 2, canvas, view_size),
 			KeyCode::Home => {
@@ -453,10 +478,31 @@ impl App {
 				{
 					self.do_link_target(t);
 					self.state.selection = Some(t);
+				} else if let Some(t) = hit {
+					// Begin a drag if we hit a node: record the offset from the
+					// cursor to the node's current top-left so it follows the
+					// cursor without snapping its corner onto it.
+					self.state.selection = Some(t);
+					if let Some(r) = self.graph.node_rect(t) {
+						let dx = cx as i32 - r.x as i32;
+						let dy = cy as i32 - r.y as i32;
+						self.drag = Some(DragState { node: t, dx, dy });
+					}
 				} else {
 					self.state.selection = hit;
 				}
 			}
+			MouseEventKind::Drag(MouseButton::Left) => {
+				// Persist the drag into the graph so the next `calculate()`
+				// keeps the node here (Pinned mode treats set_position entries
+				// as immovable anchors). Clamp to the non-negative canvas.
+				if let Some(d) = &self.drag {
+					let nx = (cx as i32 - d.dx).max(0) as u16;
+					let ny = (cy as i32 - d.dy).max(0) as u16;
+					self.graph.set_position(d.node, nx, ny);
+				}
+			}
+			MouseEventKind::Up(MouseButton::Left) => self.drag = None,
 			MouseEventKind::ScrollUp => self.state.pan(0, -3, canvas, view_size),
 			MouseEventKind::ScrollDown => self.state.pan(0, 3, canvas, view_size),
 			_ => {}
@@ -539,12 +585,14 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
 	// 1. node content via the pan-aware content rects.
 	let zones = app.graph.split_stateful(area, &app.state);
 	for (id, rect) in &zones {
-		if rect.width > 0 && rect.height > 0
+		if rect.width > 0
+			&& rect.height > 0
 			&& let Some(info) = app.info.get(id)
 		{
 			f.render_widget(
-				Paragraph::new(info.body.as_str())
-					.style(Style::default().fg(info.kind.color()).add_modifier(Modifier::BOLD)),
+				Paragraph::new(info.body.as_str()).style(
+					Style::default().fg(info.kind.color()).add_modifier(Modifier::BOLD),
+				),
 				*rect,
 			);
 		}
@@ -561,7 +609,8 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
 	{
 		for (id, rect) in &zones {
 			if *id == src && rect.width > 0 && rect.height > 0 {
-				let style = Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
+				let style =
+					Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
 				paint_border(f.buffer_mut(), *rect, style);
 				break;
 			}
@@ -594,18 +643,12 @@ fn draw_panel(f: &mut Frame, app: &App, area: Rect) {
 	for (id, layout) in app.graph.nodes() {
 		let marker = if app.state.selection == Some(*id) { "▶" } else { " " };
 		let tag = app.info.get(id).map(|i| i.kind.label()).unwrap_or("?");
-		let title = app
-			.info
-			.get(id)
-			.map(|i| i.title.as_str())
-			.unwrap_or_else(|| layout.title());
+		let title =
+			app.info.get(id).map(|i| i.title.as_str()).unwrap_or_else(|| layout.title());
 		s.push_str(&format!("{marker}{tag:<4} {}\n", truncate(title, cap)));
 	}
 
-	f.render_widget(
-		Paragraph::new(s).style(Style::default().fg(Color::Gray)),
-		inner,
-	);
+	f.render_widget(Paragraph::new(s).style(Style::default().fg(Color::Gray)), inner);
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {

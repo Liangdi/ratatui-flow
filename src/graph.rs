@@ -29,6 +29,78 @@ impl std::fmt::Display for AddNodeError {
 
 impl std::error::Error for AddNodeError {}
 
+/// How [`NodeGraph`] decides where to place each node during
+/// [`calculate`][NodeGraph::calculate].
+///
+/// - [`Auto`](Self::Auto) — the default. The graph runs its built-in recursive
+///   layout (`place_node`) starting from the root nodes, flowing in
+///   [`direction`][NodeGraph::direction]. This is byte-for-byte identical to
+///   the pre-`LayoutMode` behavior.
+/// - [`Manual`](Self::Manual) — automatic placement is **skipped entirely**;
+///   each node's position is read from the coords set via
+///   [`set_position`][NodeGraph::set_position] /
+///   [`with_position`][NodeGraph::with_position]. A node with no recorded
+///   position becomes an [`UnplacedNode`][Diagnostic::UnplacedNode]
+///   diagnostic, exactly like an unreachable node in `Auto` mode.
+///
+/// Manual coordinates are in the same canvas/logical space the `Auto` layout
+/// uses (origin top-left of the off-screen canvas), and are therefore subject
+/// to the same `Rtl`/`Btt` main-axis mirroring applied during routing and
+/// rendering — i.e. set the coordinate you'd get from
+/// [`node_rect`][NodeGraph::node_rect], not the mirrored on-screen one.
+/// Manual positions are user state and **survive** `calculate()` (they are
+/// not cleared); call [`clear_position`][NodeGraph::clear_position] to drop a
+/// node back to "unplaced".
+///
+/// [`Pinned`][LayoutMode::Pinned] blends the two: some nodes are pinned to
+/// fixed coords via [`set_position`][NodeGraph::set_position] (the **same**
+/// `manual_positions` map `Manual` reads) and act as immovable anchors, while
+/// every other node auto-layouts around them, treating the pinned rects as
+/// obstacles it must not overlap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LayoutMode {
+	/// Automatic layout: nodes are placed by the built-in recursive layout
+	/// (`place_node`) from the root nodes, flowing in
+	/// [`direction`][NodeGraph::direction]. This is the default and matches the
+	/// original hard-coded behavior byte-for-byte.
+	#[default]
+	Auto,
+	/// Manual layout: automatic placement is skipped; each node's position is
+	/// taken from [`set_position`][NodeGraph::set_position] /
+	/// [`with_position`][NodeGraph::with_position]. Nodes without a recorded
+	/// position become [`UnplacedNode`][Diagnostic::UnplacedNode] diagnostics.
+	Manual,
+	/// Pinned layout: a hybrid of [`Auto`](Self::Auto) and
+	/// [`Manual`](Self::Manual). Every node present in
+	/// [`manual_positions`][NodeGraph::manual_positions] is **pinned** to its
+	/// recorded `(x, y)` — its rect is `Rect::new(x, y, size.0, size.1)` and is
+	/// treated as an immovable anchor that the internal `place_node` and `nudge`
+	/// passes never reposition. All other nodes are auto-laid-out exactly as in
+	/// the pinned rects are pre-populated into `placements` before the walk, so
+	/// the existing intersection/nudge logic treats them as obstacles and shifts
+	/// the auto-placed nodes along the cross axis to avoid overlapping them.
+	///
+	/// The walk still traverses **through** a pinned node to reach its
+	/// neighbors (parents/children): the neighbor's main-axis offset is computed
+	/// from the pinned node's fixed far edge, so a chain `A -> pinned -> B`
+	/// still flows correctly with `B` placed beyond the pinned rect. Pinned
+	/// nodes themselves are never moved, even when an auto-placed neighbor's
+	/// main-chain nudge would otherwise push them.
+	///
+	/// **v1 limitation — overlap-free in common cases only.** The cross-axis
+	/// nudge loop shifts nodes away from obstacles one at a time and the
+	/// main-chain nudge propagates along the main axis; together these resolve
+	/// ordinary, well-spaced graphs without overlap. In pathological configs
+	/// (e.g. a pinned rect that fully blocks the only cross-axis lane on a tiny
+	/// canvas, or mutually-conflicting pinned positions) an overlap may be
+	/// unavoidable. In that case the node is placed at the best-effort
+	/// coordinate (the loop is bounded — it never panics, overflows, or spins
+	/// forever) and a [`UnplacedNode`][Diagnostic::UnplacedNode] or
+	/// [`RoutingFailed`][Diagnostic::RoutingFailed] diagnostic is emitted as
+	/// appropriate. `calculate()` always returns.
+	Pinned,
+}
+
 #[derive(Debug, Clone)]
 pub struct NodeGraph<'a> {
 	/// Nodes in render order, each tagged with its stable [`NodeId`].
@@ -41,6 +113,18 @@ pub struct NodeGraph<'a> {
 	nodes: Vec<(NodeId, NodeLayout<'a>)>,
 	connections: Vec<Connection<'a>>,
 	placements: Map<NodeId, Rect>,
+	/// User-set top-left coordinates for [`LayoutMode::Manual`], keyed by
+	/// [`NodeId`]. These are user state (like [`nodes`][Self::nodes]) and are
+	/// **not** cleared by [`calculate`][Self::calculate]; in `Manual` mode each
+	/// node with an entry here is placed at `(x, y)`, and nodes without an
+	/// entry become [`UnplacedNode`][Diagnostic::UnplacedNode] diagnostics.
+	/// Ignored in [`LayoutMode::Auto`] (the auto layout owns placement then).
+	manual_positions: Map<NodeId, (u16, u16)>,
+	/// How nodes are placed during [`calculate`][Self::calculate]: auto layout
+	/// ([`Auto`][LayoutMode::Auto], the default) or explicit coords
+	/// ([`Manual`][LayoutMode::Manual]). Defaults to `Auto`, so a graph built
+	/// without touching it lays out byte-for-byte as before.
+	layout_mode: LayoutMode,
 	conn_layout: ConnectionsLayout<'a>,
 	width: usize,
 	height: usize,
@@ -113,6 +197,8 @@ impl<'a> NodeGraph<'a> {
 			connections: Vec::new(),
 			conn_layout: ConnectionsLayout::new(width, height),
 			placements: Default::default(),
+			manual_positions: Default::default(),
+			layout_mode: LayoutMode::default(),
 			width,
 			height,
 			direction: FlowDirection::default(),
@@ -188,6 +274,83 @@ impl<'a> NodeGraph<'a> {
 	pub fn set_show_arrows(&mut self, on: bool) {
 		self.show_arrows = on;
 		self.dirty = true;
+	}
+
+	// ----- layout mode ----------------------------------------------------
+
+	/// The graph's current [`LayoutMode`] (auto vs. manual node placement).
+	/// Defaults to [`LayoutMode::Auto`], so a graph built without calling
+	/// [`set_layout_mode`][Self::set_layout_mode] lays out automatically.
+	pub fn layout_mode(&self) -> LayoutMode {
+		self.layout_mode
+	}
+
+	/// Set the graph's [`LayoutMode`]. The graph is marked dirty; call
+	/// [`calculate`][Self::calculate] before reading positions. In
+	/// [`Manual`][LayoutMode::Manual] mode the existing
+	/// [`manual_positions`][Self::manual_positions] entries are used; in
+	/// [`Auto`][LayoutMode::Auto] mode they are ignored (but kept, so toggling
+	/// back to `Manual` later restores them).
+	pub fn set_layout_mode(&mut self, mode: LayoutMode) {
+		self.layout_mode = mode;
+		self.dirty = true;
+	}
+
+	/// Builder counterpart of [`set_layout_mode`][Self::set_layout_mode].
+	#[must_use]
+	pub fn with_layout_mode(mut self, mode: LayoutMode) -> Self {
+		self.layout_mode = mode;
+		self.dirty = true;
+		self
+	}
+
+	/// Record a manual top-left coordinate `(x, y)` for `id` — used by
+	/// [`LayoutMode::Manual`] during [`calculate`][Self::calculate]. The graph
+	/// is marked dirty.
+	///
+	/// The coordinate is the node's **top-left in layout/canvas space** (origin
+	/// top-left of the off-screen canvas), the same space
+	/// [`node_rect`][Self::node_rect] reports — `Rtl`/`Btt` main-axis mirroring
+	/// is applied during routing/render, so set the un-mirrored coordinate. The
+	/// node's full frame is `Rect::new(x, y, size.0, size.1)` where `size` is
+	/// the [`NodeLayout::size`] (border included).
+	///
+	/// `id` is **not** validated to exist in the graph: this lets a caller
+	/// pre-declare a position before [`add_node_with_id`][Self::add_node_with_id]
+	/// inserts the node, and the entry simply has no effect (in `Auto` mode) or
+	/// becomes dead state (in `Manual` mode, for an id not in `nodes`) until the
+	/// node is added. Manual positions are user state and **survive**
+	/// `calculate()`; call [`clear_position`][Self::clear_position] to drop one.
+	pub fn set_position(&mut self, id: NodeId, x: u16, y: u16) {
+		self.manual_positions.insert(id, (x, y));
+		self.dirty = true;
+	}
+
+	/// Builder counterpart of [`set_position`][Self::set_position].
+	#[must_use]
+	pub fn with_position(mut self, id: NodeId, x: u16, y: u16) -> Self {
+		self.manual_positions.insert(id, (x, y));
+		self.dirty = true;
+		self
+	}
+
+	/// Drop the manual position for `id`, if any. No-op (does not error) if no
+	/// position was recorded. The graph is marked dirty; in
+	/// [`Manual`][LayoutMode::Manual] mode the next [`calculate`][Self::calculate]
+	/// will report `id` as an [`UnplacedNode`][Diagnostic::UnplacedNode] (if it's
+	/// still in `nodes`) since it no longer has explicit coords.
+	pub fn clear_position(&mut self, id: NodeId) {
+		self.manual_positions.remove(&id);
+		self.dirty = true;
+	}
+
+	/// All user-set manual positions (via [`set_position`][Self::set_position]
+	/// / [`with_position`][Self::with_position]), keyed by [`NodeId`]. Read-only
+	/// view intended for editor persistence (save/restore the map across runs)
+	/// and for diagnostics. Entries are **not** cleared by
+	/// [`calculate`][Self::calculate].
+	pub fn manual_positions(&self) -> &Map<NodeId, (u16, u16)> {
+		&self.manual_positions
 	}
 
 	// ----- mutators -------------------------------------------------------
@@ -340,9 +503,7 @@ impl<'a> NodeGraph<'a> {
 	/// (ports ignored). Cheap scan for "are these two nodes already linked".
 	#[must_use]
 	pub fn has_connection(&self, from: NodeId, to: NodeId) -> bool {
-		self.connections
-			.iter()
-			.any(|c| c.from_node == from && c.to_node == to)
+		self.connections.iter().any(|c| c.from_node == from && c.to_node == to)
 	}
 
 	/// All connections touching both `a` and `b` (either direction), borrowed.
@@ -470,21 +631,68 @@ impl<'a> NodeGraph<'a> {
 			.collect();
 		self.diagnostics.append(&mut bad_refs);
 
-		// find root nodes: every node id that is never a `from_node`.
-		let mut roots: Set<_> = self.nodes.iter().map(|(id, _)| *id).collect();
-		for ea_connection in valid_conns.iter() {
-			roots.remove(&ea_connection.from_node);
-		}
+		// Placement phase: Auto/Pinned run the recursive layout from the root
+		// nodes; Manual reads each node's position from `manual_positions` and
+		// reports un-set nodes as UnplacedNode. All arms populate
+		// `self.placements`; everything below (routing setup, conn_layout, canvas
+		// render) consumes `placements` unchanged.
+		//
+		// `Auto` and `Pinned` share the same roots-walk; the only difference is
+		// that `Pinned` first pre-populates `placements` with the pinned rects so
+		// the walk treats them as immovable obstacles. In `Auto` the pre-populate
+		// step is a no-op (the map is empty for node ids that exist), so the walk
+		// runs against an empty placement set byte-for-byte as before.
+		let run_auto_walk = match self.layout_mode {
+			LayoutMode::Manual => {
+				// Skip place_node entirely; place each node at its recorded
+				// top-left (layout/canvas space). Nodes without an entry become
+				// UnplacedNode diagnostics below (same as unreachable nodes in
+				// Auto).
+				for (id, layout) in &self.nodes {
+					if let Some(&(x, y)) = self.manual_positions.get(id) {
+						let rect = Rect::new(x, y, layout.size.0, layout.size.1);
+						self.placements.insert(*id, rect);
+					}
+				}
+				false
+			}
+			LayoutMode::Pinned => {
+				// Pre-populate the pinned nodes as immovable anchors BEFORE the
+				// walk. place_node treats any id already in `placements` as an
+				// anchor (it neither overwrites nor nudges it, but still recurses
+				// through it to reach its neighbors), so a pinned rect acts as
+				// both a fixed coordinate and an obstacle the auto-placed nodes
+				// flow around. Only ids that actually exist in `nodes` are pinned
+				// (a position for a missing node is dead state, mirroring Manual).
+				for (id, layout) in &self.nodes {
+					if let Some(&(x, y)) = self.manual_positions.get(id) {
+						let rect = Rect::new(x, y, layout.size.0, layout.size.1);
+						self.placements.insert(*id, rect);
+					}
+				}
+				true
+			}
+			LayoutMode::Auto => true,
+		};
 
-		// place them and their children (recursively). Precompute the upstream
-		// adjacency once (O(connections)) so place_node/nudge don't each re-scan
-		// + re-sort the whole connection list per node.
-		let upstream = build_upstream_index(&valid_conns);
-		let mut main_chain = Vec::new();
-		let mut visited = Set::new();
-		for ea_root in roots {
-			self.place_node(ea_root, 0, 0, &mut main_chain, &mut visited, &upstream);
-			assert!(main_chain.is_empty());
+		if run_auto_walk {
+			// find root nodes: every node id that is never a `from_node`.
+			let mut roots: Set<_> = self.nodes.iter().map(|(id, _)| *id).collect();
+			for ea_connection in valid_conns.iter() {
+				roots.remove(&ea_connection.from_node);
+			}
+
+			// place them and their children (recursively). Precompute the
+			// upstream adjacency once (O(connections)) so place_node/nudge
+			// don't each re-scan + re-sort the whole connection list per
+			// node.
+			let upstream = build_upstream_index(&valid_conns);
+			let mut main_chain = Vec::new();
+			let mut visited = Set::new();
+			for ea_root in roots {
+				self.place_node(ea_root, 0, 0, &mut main_chain, &mut visited, &upstream);
+				assert!(main_chain.is_empty());
+			}
 		}
 
 		// calculate connections (eventually, this should be done during node
@@ -642,8 +850,11 @@ impl<'a> NodeGraph<'a> {
 	) {
 		// cycle guard: if this node was already placed (reachable again through
 		// a cycle), don't re-place or recurse. this is what prevents stack
-		// overflows on root-reachable cycles.
-		if self.placements.contains_key(&idx_node) || !visited.insert(idx_node) {
+		// overflows on root-reachable cycles. NOTE: this early-return only fires
+		// for nodes placed *during* this walk; a node pre-populated by the
+		// `Pinned` arm (an immovable anchor) is handled by the `is_anchor` branch
+		// below, which still recurses through it.
+		if !visited.insert(idx_node) {
 			return;
 		}
 
@@ -652,40 +863,62 @@ impl<'a> NodeGraph<'a> {
 			// node id not present (defensive; calculate() already filtered).
 			return;
 		};
-		let size_me = node_layout.size;
-		let mut rect_me = Rect { x, y, width: size_me.0, height: size_me.1 };
 		let horiz = self.direction.is_horizontal();
 
-		// nudge placement. if a node intersects with another node, its entire
-		// main chain (largest subset of nodes including this one where every
-		// node is the first child of its parent) should be moved along the cross
-		// axis to not intersect.
-		//
-		// Repeat the for loop until it runs all the way through without any
-		// intersections. Surely there's a more efficient way to do this.
-		'outer: loop {
-			for (_, ea_them) in self.placements.iter() {
-				if rect_me.intersects(*ea_them) {
-					if horiz {
-						rect_me.y = rect_me.y.max(ea_them.bottom());
-					} else {
-						rect_me.x = rect_me.x.max(ea_them.right());
+		// `Pinned` mode pre-populates `placements` with the pinned rects before
+		// the walk. A node already present here is an immovable anchor: adopt its
+		// fixed rect as-is (do NOT overwrite, nudge, or run the intersection loop
+		// on it), but still recurse into its neighbors so they're placed relative
+		// to the anchor's far edge. In `Auto`/`Manual` the walk starts against an
+		// empty `placements`, so this branch never fires there — the layout is
+		// byte-for-byte identical to the pre-`Pinned` behavior.
+		let is_anchor = self.placements.contains_key(&idx_node);
+		let mut rect_me = if is_anchor {
+			self.placements[&idx_node]
+		} else {
+			let size_me = node_layout.size;
+			Rect { x, y, width: size_me.0, height: size_me.1 }
+		};
+
+		if !is_anchor {
+			// nudge placement. if a node intersects with another node, its entire
+			// main chain (largest subset of nodes including this one where every
+			// node is the first child of its parent) should be moved along the cross
+			// axis to not intersect.
+			//
+			// Repeat the for loop until it runs all the way through without any
+			// intersections. Surely there's a more efficient way to do this.
+			'outer: loop {
+				for (_, ea_them) in self.placements.iter() {
+					if rect_me.intersects(*ea_them) {
+						if horiz {
+							rect_me.y = rect_me.y.max(ea_them.bottom());
+						} else {
+							rect_me.x = rect_me.x.max(ea_them.right());
+						}
+						continue 'outer;
 					}
-					continue 'outer;
+				}
+				break;
+			}
+			for ea_node in main_chain.iter() {
+				// Pinned anchors in the main chain are immovable: skip them so a
+				// sibling's cross-axis nudge never overwrites their fixed coord.
+				// In `Auto`/`Manual` `manual_positions` is irrelevant to the walk,
+				// so this guard is inert there.
+				if self.manual_positions.contains_key(ea_node) {
+					continue;
+				}
+				if horiz {
+					let y = self.placements[ea_node].y.max(rect_me.y);
+					self.placements.get_mut(ea_node).unwrap().y = y;
+				} else {
+					let x = self.placements[ea_node].x.max(rect_me.x);
+					self.placements.get_mut(ea_node).unwrap().x = x;
 				}
 			}
-			break;
+			self.placements.insert(idx_node, rect_me);
 		}
-		for ea_node in main_chain.iter() {
-			if horiz {
-				let y = self.placements[ea_node].y.max(rect_me.y);
-				self.placements.get_mut(ea_node).unwrap().y = y;
-			} else {
-				let x = self.placements[ea_node].x.max(rect_me.x);
-				self.placements.get_mut(ea_node).unwrap().x = x;
-			}
-		}
-		self.placements.insert(idx_node, rect_me);
 
 		// find children and order them.
 		// Siblings stack along the cross axis; initialize the cross-axis cursor
@@ -696,7 +929,16 @@ impl<'a> NodeGraph<'a> {
 		let main_extent = if horiz { rect_me.width } else { rect_me.height };
 		main_chain.push(idx_node);
 		for ea_child in upstream.of(idx_node) {
-			if self.placements.contains_key(&ea_child.from_node) {
+			// A child already in `placements` is either (a) a node reached again
+			// through a cycle — nudge it along the main axis — or (b) a pinned
+			// anchor (pre-populated, in `manual_positions`) that must NOT be
+			// nudged but still needs its neighbors walked. Route (b) through
+			// place_node's `is_anchor` branch, which adopts the fixed rect and
+			// recurses; in `Auto`/`Manual` `manual_positions` is irrelevant to
+			// the walk so (b) never triggers and the original (a) path is
+			// byte-for-byte unchanged.
+			let child_is_pinned = self.manual_positions.contains_key(&ea_child.from_node);
+			if self.placements.contains_key(&ea_child.from_node) && !child_is_pinned {
 				// nudge it (if necessary). a fresh in_progress set per top-level
 				// nudge tracks the recursion stack to break cycles without
 				// blocking legitimate re-nudges. pass the new main-axis coordinate.
@@ -743,6 +985,14 @@ impl<'a> NodeGraph<'a> {
 		in_progress: &mut Set<NodeId>,
 		upstream: &UpstreamIndex<'a>,
 	) {
+		// Pinned anchors are immovable: never move them or their subtree along
+		// the main axis. This guard is what keeps a pinned rect at its fixed
+		// coordinate even when a neighbor's main-chain nudge would otherwise
+		// push it. In `Auto`/`Manual` `manual_positions` is either empty or
+		// irrelevant to the walk, so this branch is inert there.
+		if self.manual_positions.contains_key(&idx_node) {
+			return;
+		}
 		// cycle guard: break only if this node is already on the current
 		// recursion stack (i.e. we're inside a cycle). a node legitimately
 		// nudged twice through different paths must still be processed, so we
@@ -781,9 +1031,9 @@ impl<'a> NodeGraph<'a> {
 	}
 
 	/// Like [`split`][Self::split], but each entry is tagged with its [`NodeId`].
-	/// The order matches [`split`] (nodes in render order) and the rects are the
-	/// same content rects (border removed, mirrored to screen coordinates within
-	/// `area`).
+	/// The order matches [`Self::split`] (nodes in render order) and the rects
+	/// are the same content rects (border removed, mirrored to screen coordinates
+	/// within `area`).
 	///
 	/// Useful when you need to map a placed rect back to the node it belongs to
 	/// (e.g. hit testing).
@@ -882,10 +1132,10 @@ impl<'a> NodeGraph<'a> {
 	///
 	/// Must be called after [`calculate`][Self::calculate]; before that nothing
 	/// is placed and this always returns `None`. Port cells are computed the same
-	/// way [`render_to`] draws them, so a hit always corresponds to a visible
-	/// port glyph (the first match in render order is returned).
+	/// way the internal `render_to` pass draws them, so a hit always corresponds
+	/// to a visible port glyph (the first match in render order is returned).
 	///
-	/// [`render_to`]: Self::render_to
+	/// Internally this scans the rasterized canvas produced by `render_to`.
 	#[must_use]
 	pub fn hit_test_port(
 		&self,
@@ -1145,6 +1395,168 @@ impl<'a> NodeGraph<'a> {
 			}
 		}
 	}
+
+	// ----- text export ----------------------------------------------------
+
+	/// Dump the rendered graph's skeleton (borders / ports / connections — no
+	/// node *content*) as a `String` of box-drawing characters, one canvas row
+	/// per line joined by `'\n'`.
+	///
+	/// Walks the internal off-screen canvas in row-major order; each cell
+	/// contributes its [`symbol`](ratatui::buffer::Cell::symbol) (an empty cell
+	/// is `' '`).
+	/// Trailing spaces on every row are **kept** (full-grid fidelity) — no
+	/// trimming — so the output width is constant per row and reconstructing the
+	/// grid is unambiguous.
+	///
+	/// Must be called **after** [`calculate`][Self::calculate]; before that the
+	/// off-screen canvas is blank (every cell is a space), so the result is
+	/// `height` lines of `width` spaces (defensive, not an error). The output is
+	/// a pure read: neither `self.canvas` nor any other state is mutated.
+	///
+	/// Each cell symbol is a single grapheme for box-drawing glyphs, but
+	/// [`ratatui::buffer::Cell::symbol`] returns a `&str` to allow for
+	/// multi-codepoint clusters; we copy it verbatim, so combining marks (if any
+	/// ever appear) survive.
+	pub fn to_ascii(&self) -> String {
+		let mut rows: Vec<String> = Vec::with_capacity(self.height);
+		for y in 0..self.height {
+			let mut row = String::with_capacity(self.width);
+			for x in 0..self.width {
+				let sym = self
+					.canvas
+					.cell(Position::new(x as u16, y as u16))
+					.map(ratatui::buffer::Cell::symbol)
+					.unwrap_or(" ");
+				row.push_str(sym);
+			}
+			rows.push(row);
+		}
+		rows.join("\n")
+	}
+
+	/// Like [`to_ascii`][Self::to_ascii], but overlays each node's `content`
+	/// (multi-line text) into its interior, on top of the skeleton.
+	///
+	/// For every placed node, `content(id)` is called once; if it returns
+	/// `Some(text)`, each line of `text` is written into the node's interior
+	/// (the `(width-2, height-2)` area one cell inside the border), starting at
+	/// the interior's top-left. Lines are truncated by **display width** (via
+	/// `unicode-width`, matching [`NodeLayout::from_content`]) to the interior
+	/// width, so wide (CJK) and zero-width characters measure correctly. Lines
+	/// past the interior height are dropped. A line that is empty after
+	/// truncation is skipped (the skeleton row underneath shows through). When
+	/// `content(id)` returns `None`, the node's interior is left blank (skeleton
+	/// only).
+	///
+	/// `'c` is the lifetime of the borrowed content strings returned by
+	/// `content`; it is independent of the graph's own `'a` lifetime (the
+	/// strings are copied into the output and not retained).
+	///
+	/// Only cells the content actually covers are overwritten; the rest of each
+	/// interior row keeps whatever the skeleton drew (port names, etc.). Must be
+	/// called after [`calculate`][Self::calculate]; before that the placements
+	/// are empty and the result equals [`to_ascii`][Self::to_ascii] (all spaces).
+	/// Like `to_ascii`, this is a pure read — no state is mutated.
+	///
+	/// [`NodeLayout::from_content`]: crate::NodeLayout::from_content
+	pub fn to_ascii_with<'c>(
+		&self,
+		content: impl Fn(NodeId) -> Option<&'c str>,
+	) -> String {
+		// Start from the skeleton rows so borders/ports/connections survive
+		// untouched; we only stamp content into interior cells.
+		let mut rows: Vec<String> = Vec::with_capacity(self.height);
+		for y in 0..self.height {
+			let mut row = String::with_capacity(self.width);
+			for x in 0..self.width {
+				let sym = self
+					.canvas
+					.cell(Position::new(x as u16, y as u16))
+					.map(ratatui::buffer::Cell::symbol)
+					.unwrap_or(" ");
+				row.push_str(sym);
+			}
+			rows.push(row);
+		}
+
+		// Stamp each node's content into its interior. We use the CANVAS-space
+		// rect (`node_canvas_rect`, direction-mirrored), NOT the raw placement —
+		// the skeleton borders are drawn in canvas space (see `render_to`), so
+		// content must be placed there too, or it lands outside its frame under
+		// Rtl/Btt. Interior is one cell in on every side: x in
+		// [rect.x+1, rect.right-1), y in [rect.y+1, rect.bottom-1).
+		for (id, _) in &self.nodes {
+			let Some(rect) = self.node_canvas_rect(*id) else {
+				continue;
+			};
+			let Some(text) = content(*id) else { continue };
+			// Interior content width in display cells (>=0). A node smaller than
+			// 2x2 has no interior; saturating_sub yields 0 and every line gets
+			// truncated to nothing, which is correct.
+			let inner_w = rect.width.saturating_sub(2) as usize;
+			// Last interior row index (exclusive) in canvas coords. Rows are
+			// written starting at rect.y+1; the last valid interior row is
+			// rect.bottom()-1 (exclusive), i.e. rect.y + rect.height - 1.
+			let inner_bottom =
+				(rect.y as usize).saturating_add(rect.height as usize).saturating_sub(1);
+			for (i, line) in text.lines().enumerate() {
+				let row_idx = (rect.y as usize).saturating_add(1).saturating_add(i);
+				// Out of interior height or off the canvas: stop (subsequent
+				// lines would only be further out).
+				if row_idx >= inner_bottom || row_idx >= self.height {
+					break;
+				}
+				if line.is_empty() {
+					continue;
+				}
+				let stamped = truncate_to_width(line, inner_w);
+				if stamped.is_empty() {
+					continue;
+				}
+				// Overwrite the interior slice [rect.x+1, rect.x+1+stamped_len)
+				// with the truncated line. Anything outside that range on this
+				// row is preserved from the skeleton.
+				let row_str = rows.get_mut(row_idx).expect("row within height");
+				let start = (rect.x as usize).saturating_add(1);
+				let end = start + stamped.chars().count();
+				// Build a char-indexed replacement: replace [start, end) with the
+				// stamped characters, keeping the prefix and suffix intact. We
+				// operate on chars (not bytes) since prior cells are single
+				// box-drawing chars but the row is a String.
+				let prefix: String = row_str.chars().take(start).collect();
+				let suffix: String = row_str.chars().skip(end).collect();
+				*row_str = format!("{prefix}{stamped}{suffix}");
+			}
+		}
+		rows.join("\n")
+	}
+}
+
+/// Truncate `s` to at most `max_width` display cells, using `unicode-width` so
+/// wide (CJK) and zero-width characters measure the same way
+/// [`NodeLayout::from_content`] measures them. Stops at the first character
+/// that would push the accumulated width over `max_width`. Combining marks
+/// (zero width) stay attached to the preceding base char as long as the base
+/// fits.
+///
+/// Returns the truncated string (owned, since the cut point is mid-string for
+/// wide chars). Empty when `max_width == 0` or `s` is empty.
+///
+/// [`NodeLayout::from_content`]: crate::NodeLayout::from_content
+fn truncate_to_width(s: &str, max_width: usize) -> String {
+	use unicode_width::UnicodeWidthChar;
+	let mut out = String::new();
+	let mut width = 0usize;
+	for ch in s.chars() {
+		let cw = UnicodeWidthChar::width(ch).unwrap_or(0);
+		if width + cw > max_width {
+			break;
+		}
+		width += cw;
+		out.push(ch);
+	}
+	out
 }
 
 /// Overlay `style` onto an existing cell without changing the cell's symbol.
@@ -1673,12 +2085,22 @@ impl<'a> NodeGraph<'a> {
 					}
 				}
 			} else {
-				buf.set_string(
-					0,
-					idx_node.0 as u16,
-					format!("{}", idx_node.0),
-					Style::default(),
-				);
+				// Unplaced node (unreachable / cyclic, or Manual mode with no
+				// `set_position`): best-effort id marker in column 0 so the user
+				// can see the node exists. Bounds-checked — `set_string` indexes
+				// the buffer directly (unlike `cell_mut`), so a small canvas must
+				// not panic on a high node id, and the id string is capped to the
+				// canvas width so it can't run past the right edge.
+				let y = idx_node.0 as u16;
+				if y < area.height && area.width > 0 {
+					let capped: String = format!("{}", idx_node.0)
+						.chars()
+						.take(area.width as usize)
+						.collect();
+					if !capped.is_empty() {
+						buf.set_string(0, y, capped, Style::default());
+					}
+				}
 			}
 		}
 	}

@@ -18,9 +18,7 @@
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Position, Rect};
 use ratatui::widgets::StatefulWidget;
-use ratatui_flow::{
-	Diagnostic, FlowDirection, FlowState, NodeGraph, NodeLayout,
-};
+use ratatui_flow::{Diagnostic, FlowDirection, FlowState, NodeGraph, NodeLayout};
 
 /// Shorthand for `Connection::new` with `.into()` so test callsites stay terse
 /// after the NodeId/PortId migration: `c(from, from_port, to, to_port)`.
@@ -30,7 +28,12 @@ fn c(
 	to: usize,
 	to_port: usize,
 ) -> ratatui_flow::Connection<'static> {
-	ratatui_flow::Connection::new(from.into(), from_port.into(), to.into(), to_port.into())
+	ratatui_flow::Connection::new(
+		from.into(),
+		from_port.into(),
+		to.into(),
+		to_port.into(),
+	)
 }
 
 /// The full box-drawing line glyph set the router may paint: single-light,
@@ -78,8 +81,8 @@ fn build_calculate_render<'a>(
 /// A 6-node content-style fan-out/fan-in pipeline (same shape as
 /// `examples/content.rs`), built on a comfortably large 120x24 canvas. Every
 /// node is reachable and every connection routes successfully.
-fn pipeline_nodes_conns(
-) -> (Vec<NodeLayout<'static>>, Vec<ratatui_flow::Connection<'static>>) {
+fn pipeline_nodes_conns()
+-> (Vec<NodeLayout<'static>>, Vec<ratatui_flow::Connection<'static>>) {
 	const CONTENTS: [&str; 6] = [
 		"Source\n/data/input.csv\n~10M rows",
 		"Parse\nheader row\ninfer schema\nutf-8 decode",
@@ -107,10 +110,8 @@ fn clean_dag_routes_all_connections() {
 	let area = Rect::new(0, 0, 120, 24);
 	let (diags, buf) = build_calculate_render(nodes, conns, area);
 
-	let routing_failures = diags
-		.iter()
-		.filter(|d| matches!(d, Diagnostic::RoutingFailed { .. }))
-		.count();
+	let routing_failures =
+		diags.iter().filter(|d| matches!(d, Diagnostic::RoutingFailed { .. })).count();
 	assert_eq!(
 		routing_failures, 0,
 		"clean DAG must report zero RoutingFailed diagnostics, got {diags:?}",
@@ -146,10 +147,7 @@ fn routed_connections_do_not_cross_node_interiors() {
 	graph.calculate();
 	let diags = graph.diagnostics().to_vec();
 	assert_eq!(
-		diags
-			.iter()
-			.filter(|d| matches!(d, Diagnostic::RoutingFailed { .. }))
-			.count(),
+		diags.iter().filter(|d| matches!(d, Diagnostic::RoutingFailed { .. })).count(),
 		0,
 		"fan-out must route cleanly before checking interiors"
 	);
@@ -261,14 +259,23 @@ fn unroutable_connection_emits_routing_failed_and_alias() {
 	);
 
 	// (b) The fallback alias glyph (one of the Greek letters α..ω) is drawn.
-	let alias_cells = buf.content().iter().filter(|cell| {
-		let s = cell.symbol();
-		matches!(
-			s,
-			"α" | "β" | "γ" | "δ" | "ε" | "ζ" | "η" | "θ" | "ι" | "κ" | "λ" | "μ"
-			| "ν" | "ξ" | "ο" | "π" | "ρ" | "σ" | "τ" | "υ" | "φ" | "χ" | "ψ" | "ω"
-		)
-	}).count();
+	let alias_cells =
+		buf.content()
+			.iter()
+			.filter(|cell| {
+				let s = cell.symbol();
+				matches!(
+					s,
+					"α" | "β"
+						| "γ" | "δ" | "ε" | "ζ"
+						| "η" | "θ" | "ι" | "κ"
+						| "λ" | "μ" | "ν" | "ξ"
+						| "ο" | "π" | "ρ" | "σ"
+						| "τ" | "υ" | "φ" | "χ"
+						| "ψ" | "ω"
+				)
+			})
+			.count();
 	assert!(
 		alias_cells > 0,
 		"unroutable connection must draw an alias glyph (α..ω) as the fallback, drew none"
@@ -281,12 +288,8 @@ fn unroutable_connection_emits_routing_failed_and_alias() {
 
 #[test]
 fn multiple_directions_route_cleanly() {
-	let directions = [
-		FlowDirection::Ltr,
-		FlowDirection::Rtl,
-		FlowDirection::Ttb,
-		FlowDirection::Btt,
-	];
+	let directions =
+		[FlowDirection::Ltr, FlowDirection::Rtl, FlowDirection::Ttb, FlowDirection::Btt];
 
 	for dir in directions {
 		// A simple 3-node chain (2 -> 1 -> 0). Canvas tall enough for vertical

@@ -14,7 +14,7 @@
 
 use crate::id::NodeId;
 
-/// Interactive state for [`crate::NodeGraph`]'s [`StatefulWidget`] impl.
+/// Interactive state for [`crate::NodeGraph`]'s ratatui `StatefulWidget` impl.
 ///
 /// Holds:
 ///   - `view_offset` — the top-left corner of the visible window inside the
@@ -164,11 +164,7 @@ fn ensure_axis(cur: u16, origin: u16, extent: u16, view: u16, max: u16) -> u16 {
 	}
 	// Off the left/top: align origin. Off the right/bottom: align far edge
 	// with the view's far edge.
-	let target = if origin < cur {
-		origin
-	} else {
-		far.saturating_sub(view)
-	};
+	let target = if origin < cur { origin } else { far.saturating_sub(view) };
 	clamp_offset(target, max)
 }
 

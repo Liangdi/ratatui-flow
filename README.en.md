@@ -79,6 +79,7 @@ f.render_stateful_widget(graph, area, &mut ());
 ```bash
 cargo run --example viewport   # interactive: 16-node graph + keyboard scrolling
 cargo run --example content    # 6-node pipeline, content-aware sizing
+cargo run --example export     # non-interactive: export the graph as ASCII text
 cargo run --example basic      # minimal
 cargo run --example tiny       # renders into a buffer and prints
 ```
@@ -132,6 +133,65 @@ Call `graph.diagnostics()` after `calculate()` to get `&[Diagnostic]`:
 | `UnplacedNode { node }` | node is unreachable from any root (e.g. sits in a pure cycle) |
 | `InvalidConnectionRef { from_node, to_node }` | connection references an out-of-bounds node, skipped |
 | `RoutingFailed { from_node, from_port, to_node, to_port }` | a connection could not be routed and fell back to an alias character |
+
+## Text export
+
+Render the graph as plain ASCII text — no terminal, no `Frame`. Handy for embedding flowcharts in docs / Markdown / CLI output. `to_ascii()` draws the skeleton only (borders/ports/connections); `to_ascii_with(content)` overlays each node's body on top of the skeleton. Both are pure reads and require `calculate()` first.
+
+```rust
+use ratatui_flow::{NodeGraph, NodeLayout, Connection};
+
+let nodes = vec![
+    NodeLayout::from_content("Source\n/data/input.csv").with_title("src"),
+    NodeLayout::from_content("Sink\nINSERT INTO events").with_title("out"),
+];
+let conns = vec![Connection::new(0.into(), 0.into(), 1.into(), 0.into())];
+let mut graph = NodeGraph::new(nodes, conns, 80, 8);
+graph.calculate();
+
+// skeleton (no content)
+println!("{}", graph.to_ascii());
+// skeleton + node bodies (look up each node's text by id)
+let bodies = ["Source\n/data/input.csv", "Sink\nINSERT INTO events"];
+println!("{}", graph.to_ascii_with(|id| Some(bodies[id.as_u32() as usize])));
+```
+
+Output (full version):
+
+```
+┌src────────────┐     ┌out──────────────┐
+│Source         ├─────┤Sink             │
+│/data/input.csv│     │INSERT INTO events│
+└───────────────┘     └─────────────────┘
+```
+
+Run `cargo run --example export` to see the skeleton and full variants of a complete 4-node pipeline.
+
+## Layout modes
+
+The default `LayoutMode::Auto` auto-lays-out every node on each `calculate()`. Two other modes let you specify node positions explicitly:
+
+- **`LayoutMode::Manual`**: every node must be given a coordinate via `set_position` (or `with_position`); any missing node triggers an `UnplacedNode` diagnostic but **never** panics.
+- **`LayoutMode::Pinned`**: only **some** nodes are pinned via `set_position`. They act as immovable anchors / obstacles; the rest auto-layout around them.
+
+```rust
+use ratatui_flow::{NodeGraph, NodeLayout, Connection, LayoutMode};
+
+// Manual: you decide every node's position
+let mut g = NodeGraph::new(nodes, conns, 120, 40)
+    .with_layout_mode(LayoutMode::Manual)
+    .with_position(0.into(), 2, 2)
+    .with_position(1.into(), 40, 2);
+g.calculate();
+
+// Pinned: pin only a few nodes; the rest auto-layout around them
+let mut g = NodeGraph::new(nodes2, conns2, 120, 40)
+    .with_layout_mode(LayoutMode::Pinned)
+    .with_position(0.into(), 2, 2);   // node 0 stays put, the rest auto-layout
+g.calculate();
+```
+
+v1 limitation: under pathological collision configs between pinned nodes, the auto-layout degrades gracefully (reported via a `Diagnostic`, never panicking).
 
 ## API surface
 

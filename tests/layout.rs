@@ -907,7 +907,8 @@ fn stateful_pan_is_continuous_at_offset_zero() {
 	let x0 = leftmost_yellow(0).expect("node 2 border visible at offset (0,0)");
 	let x1 = leftmost_yellow(1).expect("node 2 border visible at offset (1,0)");
 	assert_eq!(
-		x0, x1 + 1,
+		x0,
+		x1 + 1,
 		"panning one cell must shift the border exactly one cell (smooth pan, no jump)"
 	);
 }

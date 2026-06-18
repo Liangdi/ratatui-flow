@@ -5,8 +5,8 @@
 
 use ratatui::layout::Rect;
 use ratatui_flow::{
-	AddNodeError, Connection, Diagnostic, FlowDirection, NodeGraph, NodeId,
-	NodeLayout, PortId,
+	AddNodeError, Connection, Diagnostic, FlowDirection, NodeGraph, NodeId, NodeLayout,
+	PortId,
 };
 
 /// Shorthand for `Connection::new` (matches `tests/layout.rs`): terse callsites.
@@ -92,14 +92,9 @@ fn replace_node_unknown_id_returns_conflict() {
 	graph.calculate();
 	assert!(!graph.is_dirty(), "clean baseline before failed replace");
 
-	let err = graph
-		.replace_node(nid(99), NodeLayout::new((10, 5)))
-		.unwrap_err();
+	let err = graph.replace_node(nid(99), NodeLayout::new((10, 5))).unwrap_err();
 	assert_eq!(err, AddNodeError::ConflictingId);
-	assert!(
-		!graph.is_dirty(),
-		"failed replace_node must not dirty the graph"
-	);
+	assert!(!graph.is_dirty(), "failed replace_node must not dirty the graph");
 }
 
 // ===========================================================================
@@ -142,11 +137,7 @@ fn connections_between_both_directions() {
 	graph.calculate();
 
 	let between = graph.connections_between(nid(0), nid(1));
-	assert_eq!(
-		between.len(),
-		2,
-		"both directions count as connections between 0 and 1"
-	);
+	assert_eq!(between.len(), 2, "both directions count as connections between 0 and 1");
 	// Order-independent: asking with the endpoints swapped yields the same set.
 	let between_swapped = graph.connections_between(nid(1), nid(0));
 	assert_eq!(between_swapped.len(), 2);
