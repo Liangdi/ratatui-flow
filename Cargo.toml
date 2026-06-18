@@ -21,6 +21,7 @@ unicode-width = "0.2"
 ratatui = { version = "0.30.0", features = ["crossterm"] }
 crossterm = "0.29"
 criterion = "0.8"
+ratatui-sci-fi = "0.2.0"
 
 [[bench]]
 name = "calculate"
