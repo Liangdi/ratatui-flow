@@ -412,6 +412,32 @@ impl<'a> ConnectionsLayout<'a> {
 		}
 	}
 
+	/// Reset all accumulated routing state so that [`NodeGraph::calculate`] is
+	/// idempotent across repeated calls.
+	///
+	/// Each `calculate` re-runs routing from scratch, but the per-connection
+	/// bookkeeping here (ports, connections, alias map, per-class line
+	/// types/styles/labels, diagnostics) is only ever *appended* to during a
+	/// run, and the `edge_field` accumulates `Edge::Connection` marks along
+	/// routed paths. Without clearing between runs, a second `calculate()` would
+	/// route every previously-seen connection again (the list doubles each call)
+	/// and the stale path marks would pollute `calc_cost` (treated as
+	/// "already-existing connection", cost 1). This blanks all of that while
+	/// preserving `width`/`height`.
+	pub(crate) fn reset(&mut self) {
+		self.ports.clear();
+		self.connections.clear();
+		self.alias_connections.clear();
+		self.line_types.clear();
+		self.line_styles.clear();
+		self.label_texts.clear();
+		self.labels.clear();
+		self.diagnostics.clear();
+		// Re-allocate a blank edge field. (OPT-1 flattens `Betweens`, after which
+		// this becomes a single `buf.fill(Edge::default())` memset.)
+		self.edge_field = Betweens::new(self.width, self.height);
+	}
+
 	pub(crate) fn push_connection(&mut self, connection: (Connection<'a>, usize)) {
 		// Record the label text (if any) for this class so that `calculate`
 		// knows to capture a midpoint and `render` knows to draw it. The label

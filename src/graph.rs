@@ -316,6 +316,12 @@ impl<'a> NodeGraph<'a> {
 		self.placements.clear();
 		self.diagnostics.clear();
 		self.dirty = false;
+		// Reset the connection router's accumulated state so repeated
+		// `calculate()` calls are idempotent: without this, `conn_layout` would
+		// keep appending to its connection list and leave stale `Edge::Connection`
+		// marks in the edge field from the previous run, both slowing routing
+		// down (the list grows each call) and polluting routing costs.
+		self.conn_layout.reset();
 
 		// Build the set of known node ids up front so the connection filter
 		// below doesn't need to re-borrow `self` (which would conflict with

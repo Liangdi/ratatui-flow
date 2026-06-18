@@ -2168,3 +2168,66 @@ fn port_name_in_vertical_direction() {
 		"Ttb: in-port name first char must be one cell above the bottom edge"
 	);
 }
+
+// ===========================================================================
+// OPT-0: calculate() idempotency. Repeated `calculate()` on the SAME graph
+// (what a TUI does after mutating it) must NOT accumulate routing state. The
+// connection router used to append to its connection list on every call and
+// leave stale `Edge::Connection` marks in the edge field, so the 2nd run
+// diverged: diagnostics multiplied and rendered paths drifted.
+// ===========================================================================
+
+/// Re-calculating a graph whose connection fails to route must keep emitting
+/// the SAME single `RoutingFailed`, not one extra per call. Before OPT-0 the
+/// connection list doubled each run, so the 2nd `calculate()` produced TWO
+/// `RoutingFailed` entries for the one connection.
+#[test]
+fn calculate_repeated_does_not_accumulate_diagnostics() {
+	let mut graph = NodeGraph::new(
+		vec![NodeLayout::new((4, 4)), NodeLayout::new((4, 4))],
+		vec![c(0, 0, 1, 0)],
+		8,
+		4,
+	);
+	graph.calculate();
+	let diags1 = graph.diagnostics().to_vec();
+	assert_eq!(diags1.len(), 1, "first run: exactly one RoutingFailed diagnostic");
+
+	graph.calculate();
+	let diags2 = graph.diagnostics().to_vec();
+	assert_eq!(
+		diags2.len(),
+		1,
+		"second run must NOT add a duplicate diagnostic (accumulation bug)"
+	);
+	assert_eq!(diags1, diags2, "diagnostics must be stable across recalculates");
+}
+
+/// Rendering a graph that has been `calculate()`d twice must be byte-identical
+/// to one `calculate()`d once. Two independent graph instances of the same
+/// shape are used because `StatefulWidget::render` consumes `self`. Before
+/// OPT-0 the double-calculated instance accumulated stale edge-field marks and
+/// diverged from the single-calculated one.
+#[test]
+fn calculate_twice_renders_identically_to_once() {
+	let area = Rect::new(0, 0, 120, 24);
+
+	// Instance A: calculate once.
+	let mut a = content_fixture_graph();
+	a.calculate();
+
+	// Instance B: calculate TWICE (simulates a TUI re-layout after mutation).
+	let mut b = content_fixture_graph();
+	b.calculate();
+	b.calculate();
+
+	let mut buf_a = Buffer::empty(area);
+	a.render(area, &mut buf_a, &mut FlowState::default());
+	let mut buf_b = Buffer::empty(area);
+	b.render(area, &mut buf_b, &mut FlowState::default());
+
+	assert_eq!(
+		buf_a, buf_b,
+		"double-calculate must render byte-identically to single-calculate"
+	);
+}
