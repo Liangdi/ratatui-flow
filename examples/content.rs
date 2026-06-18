@@ -47,6 +47,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	drop(terminal);
 	print!("\x1b[2J\x1b[1;1H");
 	print!("{}", std::str::from_utf8(&out)?);
+	// finish with a newline so the shell prompt lands on a fresh line
+	println!();
 	Ok(())
 }
 
@@ -57,28 +59,62 @@ fn ui(f: &mut Frame) {
 	let nodes: Vec<NodeLayout> = TITLES
 		.iter()
 		.zip(CONTENTS.iter())
-		.map(|(title, content)| {
-			NodeLayout::from_content(content)
+		.enumerate()
+		.map(|(i, (title, content))| {
+			let mut node = NodeLayout::from_content(content)
 				.with_title(title)
-				.with_border_type(BorderType::Rounded)
+				.with_border_type(BorderType::Rounded);
+			// Step 9: attach short display names to some ports so they render
+			// one cell inside the node from each port symbol. Port ids here
+			// match the connection's from_port / to_port values below.
+			match i {
+				0 => {
+					// src: one out port feeding parse + valid
+					node = node
+						.with_port_name(0usize.into(), "raw")
+						.with_port_name(1usize.into(), "raw");
+				}
+				3 => {
+					// xform: an in port from parse, another from valid; out ports
+					// to filter and sink.
+					node = node
+						.with_port_name(0usize.into(), "tok")
+						.with_port_name(1usize.into(), "ok")
+						.with_port_name(2usize.into(), "out")
+						.with_port_name(3usize.into(), "db");
+				}
+				5 => {
+					// sink: two in ports
+					node = node
+						.with_port_name(0usize.into(), "rec")
+						.with_port_name(1usize.into(), "flt");
+				}
+				_ => {}
+			}
+			node
 		})
 		.collect();
 
 	// from_node = output side, to_node = input side. Roots (nodes that never
 	// appear as a `from_node`, i.e. final outputs) land on the right; the
 	// graph opens leftward toward the sources. One color per connection.
+	// A few connections carry a `.with_label(...)` so the connection's role is
+	// readable at its midpoint (Step 8 feature).
 	let connections = vec![
 		Connection::new(0usize.into(), 0usize.into(), 1usize.into(), 0usize.into())
-			.with_line_style(Style::default().fg(Color::Green)), // src   -> parse
+			.with_line_style(Style::default().fg(Color::Green))
+			.with_label("raw"), // src   -> parse
 		Connection::new(0usize.into(), 0usize.into(), 2usize.into(), 0usize.into())
 			.with_line_style(Style::default().fg(Color::Blue)), // src   -> valid
 		Connection::new(1usize.into(), 0usize.into(), 3usize.into(), 0usize.into())
 			.with_line_type(LineType::Double)
-			.with_line_style(Style::default().fg(Color::Yellow)), // parse -> xform
+			.with_line_style(Style::default().fg(Color::Yellow))
+			.with_label("tokens"), // parse -> xform
 		Connection::new(2usize.into(), 0usize.into(), 3usize.into(), 1usize.into())
 			.with_line_style(Style::default().fg(Color::Cyan)), // valid -> xform
 		Connection::new(3usize.into(), 0usize.into(), 4usize.into(), 0usize.into())
-			.with_line_style(Style::default().fg(Color::Magenta)), // xform -> filter
+			.with_line_style(Style::default().fg(Color::Magenta))
+			.with_label("out"), // xform -> filter
 		Connection::new(3usize.into(), 1usize.into(), 5usize.into(), 0usize.into())
 			.with_line_type(LineType::Double)
 			.with_line_style(Style::default().fg(Color::Red)), // xform -> sink
@@ -100,5 +136,5 @@ fn ui(f: &mut Frame) {
 			zone,
 		);
 	}
-	f.render_stateful_widget(graph, space, &mut ());
+	f.render_stateful_widget(graph, space, &mut FlowState::default());
 }
