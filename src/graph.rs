@@ -172,6 +172,24 @@ impl<'a> NodeGraph<'a> {
 		self
 	}
 
+	/// Mutator counterpart of [`with_direction`][Self::with_direction]: set the
+	/// flow direction on an existing graph. The graph is marked dirty; call
+	/// [`calculate`][Self::calculate] before reading positions. Useful for
+	/// interactive apps that rotate the layout at runtime without rebuilding.
+	pub fn set_direction(&mut self, direction: FlowDirection) {
+		self.direction = direction;
+		self.dirty = true;
+	}
+
+	/// Mutator counterpart of [`show_arrows`][Self::show_arrows]: toggle the
+	/// connection direction arrows on an existing graph. The graph is marked
+	/// dirty so the off-screen canvas is re-rendered with the new setting on the
+	/// next [`calculate`][Self::calculate] (matters for the panned/blitted view).
+	pub fn set_show_arrows(&mut self, on: bool) {
+		self.show_arrows = on;
+		self.dirty = true;
+	}
+
 	// ----- mutators -------------------------------------------------------
 
 	/// Append a node, assigning it the next fresh [`NodeId`] (and bumping the
@@ -263,11 +281,81 @@ impl<'a> NodeGraph<'a> {
 		removed
 	}
 
+	/// Replace an existing node's [`NodeLayout`] (size/title/border/port-names)
+	/// in place, keeping its [`NodeId`] and all connections. Lets an editor resize
+	/// or retitle a node without a remove+re-add. Returns
+	/// [`Err(ConflictingId)`][AddNodeError::ConflictingId] if `id` is not present
+	/// (reuses [`AddNodeError`] for a stable error type); on success the graph is
+	/// marked dirty (call [`calculate`] before reading positions). Connections
+	/// referencing `id` are untouched.
+	///
+	/// [`calculate`]: Self::calculate
+	pub fn replace_node(
+		&mut self,
+		id: NodeId,
+		node: NodeLayout<'a>,
+	) -> Result<(), AddNodeError> {
+		match self.nodes.iter().position(|(nid, _)| *nid == id) {
+			None => Err(AddNodeError::ConflictingId),
+			Some(idx) => {
+				self.nodes[idx].1 = node;
+				self.dirty = true;
+				Ok(())
+			}
+		}
+	}
+
 	// ----- queries / getters ---------------------------------------------
 
 	/// `true` if a node with the given [`NodeId`] exists in the graph.
 	pub fn has_node(&self, id: NodeId) -> bool {
 		self.nodes.iter().any(|(nid, _)| *nid == id)
+	}
+
+	/// All nodes in render (insertion) order, each tagged with its stable
+	/// [`NodeId`] and [`NodeLayout`]. Exposed so callers can enumerate the
+	/// graph's nodes — build a side panel, cycle a selection, look up a title —
+	/// without keeping a parallel structure in sync with
+	/// [`add_node`][Self::add_node] / [`remove_node`][Self::remove_node].
+	///
+	/// The slice is the graph's authoritative node list; mutating the graph
+	/// updates it in place. Must be called after [`calculate`][Self::calculate]
+	/// if you also intend to read [`positions`][Self::positions].
+	pub fn nodes(&self) -> &[(NodeId, NodeLayout<'a>)] {
+		&self.nodes
+	}
+
+	/// All [`Connection`]s currently in the graph, in insertion order. This is
+	/// the authoritative edge list: mutators like
+	/// [`remove_node`][Self::remove_node] cascade-delete every connection that
+	/// touches the removed node, so reading this after any mutation avoids drift
+	/// with a caller-maintained shadow list. Pair with [`Connection::from_node`]
+	/// / [`Connection::to_node`] (and the port/label accessors) to inspect an
+	/// edge's endpoints.
+	pub fn connections(&self) -> &[Connection<'a>] {
+		&self.connections
+	}
+
+	/// `true` if any connection has endpoints `(from, to)` in that direction
+	/// (ports ignored). Cheap scan for "are these two nodes already linked".
+	#[must_use]
+	pub fn has_connection(&self, from: NodeId, to: NodeId) -> bool {
+		self.connections
+			.iter()
+			.any(|c| c.from_node == from && c.to_node == to)
+	}
+
+	/// All connections touching both `a` and `b` (either direction), borrowed.
+	/// Empty if none. Useful for listing/inspecting the links between two nodes.
+	#[must_use]
+	pub fn connections_between(&self, a: NodeId, b: NodeId) -> Vec<&Connection<'a>> {
+		self.connections
+			.iter()
+			.filter(|c| {
+				(c.from_node == a && c.to_node == b)
+					|| (c.from_node == b && c.to_node == a)
+			})
+			.collect()
 	}
 
 	/// `true` if the graph changed since the last [`calculate`][Self::calculate]
@@ -296,6 +384,30 @@ impl<'a> NodeGraph<'a> {
 	/// / never calculated).
 	pub fn node_rect(&self, id: NodeId) -> Option<Rect> {
 		self.placements.get(&id).copied()
+	}
+
+	/// The node's full-frame [`Rect`] (border included) in **canvas** coordinates
+	/// — i.e. where it lives in the off-screen canvas the stateful render blits,
+	/// after the `Rtl`/`Btt` main-axis mirror. This is the counterpart of
+	/// [`node_rect`][Self::node_rect] (which returns layout coords) for code that
+	/// works in canvas space, e.g. feeding [`FlowState::ensure_visible`] or
+	/// [`FlowState::center_on`] to keep a node in view. Returns `None` if the
+	/// node isn't placed (or has a 0×0 placement).
+	#[must_use]
+	pub fn node_canvas_rect(&self, id: NodeId) -> Option<Rect> {
+		let layout = self.placements.get(&id).copied()?;
+		if layout.width == 0 || layout.height == 0 {
+			return None;
+		}
+		let mut pos = layout;
+		if self.direction.is_horizontal() {
+			if self.direction.mirror_main_axis() {
+				pos.x = (self.width as u16).saturating_sub(pos.right());
+			}
+		} else if self.direction.mirror_main_axis() {
+			pos.y = (self.height as u16).saturating_sub(pos.bottom());
+		}
+		Some(pos)
 	}
 
 	/// Internal helper: borrow the [`NodeLayout`] for a node id, if present.
@@ -710,59 +822,128 @@ impl<'a> NodeGraph<'a> {
 			.collect()
 	}
 
-	/// Hit-test a **screen** coordinate against the placed nodes and return the
+	/// Hit-test a **canvas** coordinate against the placed nodes and return the
 	/// [`NodeId`] of the node whose full frame (border included) contains
 	/// `(x, y)`, or `None` if the point falls in empty space or on a node that
 	/// was never placed.
 	///
-	/// `(x, y)` is interpreted relative to `area`'s top-left corner (i.e. they
-	/// are screen coordinates within `area`), exactly like the rects returned by
-	/// [`split`][Self::split] / [`split_named`][Self::split_named]. The hit area
-	/// is each node's **bordered** rect (a point on the border counts as a hit),
-	/// matching the granularity used by the off-screen canvas — so the inner
-	/// content rects from `split_named` are strictly contained in the hit rects.
+	/// `(x, y)` is a **canvas** coordinate: for a screen point under a panned
+	/// view, the caller pre-translates it as `canvas = screen - area.origin +
+	/// state.view_offset`. The hit area is each node's **bordered** rect (a
+	/// point on the border counts as a hit), mirrored about the canvas size for
+	/// `Rtl`/`Btt` — the same canvas-absolute space the stateful render blits, so
+	/// a hit always corresponds to a visible border cell.
 	///
-	/// Must be called **after** [`calculate`][Self::calculate]; before that,
-	/// [`positions`][Self::positions] is empty and `hit_test` always returns
-	/// `None`. The transformation honors [`direction`][Self::direction] (the same
-	/// canvas→screen mirror as `split_named`), so hit testing is correct for
-	/// `Ltr`/`Rtl`/`Ttb`/`Btt`.
-	///
-	/// Nodes never overlap in canvas space, so at most one node can contain a
-	/// given point; the first match (in render order) is returned. Viewport
-	/// offset is **not** applied here — for a scrolled graph use the upcoming
-	/// `hit_test_viewport` (Step 6), or pre-translate `(x, y)` by the offset.
+	/// `area` is kept in the signature for stability but is not used by the hit
+	/// math (the point is already in canvas coords). Must be called **after**
+	/// [`calculate`][Self::calculate]; before that, [`positions`][Self::positions]
+	/// is empty and `hit_test` always returns `None`. Nodes never overlap in
+	/// canvas space, so at most one node can contain a given point; the first
+	/// match (in render order) is returned.
 	pub fn hit_test(&self, area: Rect, x: u16, y: u16) -> Option<NodeId> {
+		let _ = area;
 		for (id, canvas_rect) in self.placements.iter() {
 			// A 0×0 placement means the node never fit / was never placed —
 			// it has no on-screen extent to hit.
 			if canvas_rect.width == 0 || canvas_rect.height == 0 {
 				continue;
 			}
-			// Same bounds + canvas→screen transform as `split_named`, but kept
-			// WITHOUT `.inner(Margin{1,1})` so the border is part of the hit
-			// rect. Mirroring uses `self.direction` so Ltr/Btt/Ttb stay aligned.
-			if canvas_rect.right() > area.width || canvas_rect.bottom() > area.height {
+			// Skip nodes whose layout placement exceeds the canvas (defensive —
+			// placements are normally within bounds).
+			if canvas_rect.right() > self.width as u16
+				|| canvas_rect.bottom() > self.height as u16
+			{
 				continue;
 			}
+			// Mirror the layout placement into canvas coords (same transform as
+			// the off-screen canvas), WITHOUT `.inner(Margin{1,1})` so the
+			// border is part of the hit rect. (x,y) are canvas coords too.
 			let mut pos = *canvas_rect;
 			if self.direction.is_horizontal() {
 				if self.direction.mirror_main_axis() {
-					pos.x = area.width - pos.right() + area.x;
-				} else {
-					pos.x += area.x;
+					pos.x = (self.width as u16).saturating_sub(pos.right());
 				}
-				pos.y += area.y;
-			} else {
-				pos.x += area.x;
-				if self.direction.mirror_main_axis() {
-					pos.y = area.height - pos.bottom() + area.y;
-				} else {
-					pos.y += area.y;
-				}
+			} else if self.direction.mirror_main_axis() {
+				pos.y = (self.height as u16).saturating_sub(pos.bottom());
 			}
 			if pos.contains(Position { x, y }) {
 				return Some(*id);
+			}
+		}
+		None
+	}
+
+	/// Like [`hit_test`][Self::hit_test], but if the canvas point `(x, y)` lands
+	/// on a node's PORT cell, return `(node, port, is_input)` identifying which
+	/// port. `is_input == true` means the `to` (in) port, `false` the `from`
+	/// (out) port. Returns `None` for empty space, node interiors, or border
+	/// cells that aren't ports. `(x, y)` are CANVAS coordinates (same contract as
+	/// [`hit_test`][Self::hit_test]).
+	///
+	/// Must be called after [`calculate`][Self::calculate]; before that nothing
+	/// is placed and this always returns `None`. Port cells are computed the same
+	/// way [`render_to`] draws them, so a hit always corresponds to a visible
+	/// port glyph (the first match in render order is returned).
+	///
+	/// [`render_to`]: Self::render_to
+	#[must_use]
+	pub fn hit_test_port(
+		&self,
+		area: Rect,
+		x: u16,
+		y: u16,
+	) -> Option<(NodeId, PortId, bool)> {
+		let _ = area;
+		let horiz = self.direction.is_horizontal();
+		let mirror = self.direction.mirror_main_axis();
+		// Mirror the layout placement into canvas coords the same way hit_test /
+		// render_to do (Rtl mirrors x about the canvas width, Btt mirrors y about
+		// the canvas height; Ltr/Ttb are unchanged), then check each port cell
+		// rendered on that canvas rect. The port cell math mirrors render_to
+		// exactly (it is the source of truth for where ports are drawn).
+		let canvas_w = self.width as u16;
+		let canvas_h = self.height as u16;
+		for (id, canvas_rect) in self.placements.iter() {
+			if canvas_rect.width == 0 || canvas_rect.height == 0 {
+				continue;
+			}
+			if canvas_rect.right() > canvas_w || canvas_rect.bottom() > canvas_h {
+				continue;
+			}
+			let mut pos = *canvas_rect;
+			if horiz {
+				if mirror {
+					pos.x = canvas_w.saturating_sub(pos.right());
+				}
+			} else if mirror {
+				pos.y = canvas_h.saturating_sub(pos.bottom());
+			}
+			// Iterate every connection that references this node and compute its
+			// rendered port cell. The port index is clamped to the node's inner
+			// extent the same way render_to clamps it (clamp_port).
+			for c in &self.connections {
+				if c.to_node == *id {
+					let port = clamp_port(c.to_port.0 as usize, pos.height) as u16;
+					let (px, py) = if horiz {
+						(pos.left(), pos.top() + port + 1)
+					} else {
+						(pos.left() + port + 1, pos.bottom() - 1)
+					};
+					if px == x && py == y {
+						return Some((*id, c.to_port, true));
+					}
+				}
+				if c.from_node == *id {
+					let port = clamp_port(c.from_port.0 as usize, pos.height) as u16;
+					let (px, py) = if horiz {
+						(pos.right() - 1, pos.top() + port + 1)
+					} else {
+						(pos.left() + port + 1, pos.top())
+					};
+					if px == x && py == y {
+						return Some((*id, c.from_port, false));
+					}
+				}
 			}
 		}
 		None
@@ -874,33 +1055,52 @@ impl<'a> NodeGraph<'a> {
 			.collect()
 	}
 
-	/// Translate a node's canvas-rect (border included) into screen coordinates
-	/// under a panned view: apply the canvas→screen mirror (per `self.direction`)
-	/// and the `view_offset` pan, then return the (possibly clipped) rect. Used
-	/// by the stateful highlight overlay to find where a node's border lives on
-	/// screen. Returns `None` if the node isn't placed or its rect is 0×0.
+	/// Translate a node's layout placement (border included) into the on-screen
+	/// rect its border is actually drawn at, so the stateful highlight overlay
+	/// lands on the right cells. Returns `None` if the node isn't placed, has a
+	/// 0×0 rect, or ends up fully clipped out of `area`.
+	///
+	/// Borders always live in **canvas-absolute** coordinates: the off-screen
+	/// canvas (rendered once during [`calculate`][Self::calculate]) mirrors the
+	/// layout placement about the canvas size for `Rtl`/`Btt`, and the stateful
+	/// render path blits a window of it at every offset. So this mirrors the
+	/// placement into canvas coords the same way, then translates by
+	/// `-view_offset + area.origin`. Non-mirrored directions (`Ltr`/`Ttb`) map
+	/// straight through. This is consistent at every pan offset, so the
+	/// highlight tracks the border whether or not the view is panned.
 	fn node_screen_rect(
 		&self,
 		id: NodeId,
 		area: Rect,
 		view_offset: (u16, u16),
 	) -> Option<Rect> {
-		let canvas_rect = self.placements.get(&id).copied()?;
-		if canvas_rect.width == 0 || canvas_rect.height == 0 {
+		let layout = self.placements.get(&id).copied()?;
+		if layout.width == 0 || layout.height == 0 {
 			return None;
 		}
 		let (ox, oy) = view_offset;
-		// canvas-coord bordered rect -> screen: subtract the pan offset, add the
-		// area origin. No mirror here — the canvas already holds the mirrored
-		// rendering (render_to ran with the mirror during calculate), so the
-		// canvas cell at (cx, cy) corresponds to screen (cx - ox + area.x, ...).
-		let mut pos = canvas_rect;
+		let horiz = self.direction.is_horizontal();
+		let mirror = self.direction.mirror_main_axis();
+
+		let mut pos = layout;
+		// Mirror the layout placement into canvas coords (the canvas holds the
+		// mirrored rendering). Rtl mirrors x about the canvas width; Btt
+		// mirrors y about the canvas height; Ltr/Ttb are unchanged.
+		if horiz {
+			if mirror {
+				pos.x = (self.width as u16).saturating_sub(pos.right());
+			}
+		} else if mirror {
+			pos.y = (self.height as u16).saturating_sub(pos.bottom());
+		}
 		// fully scrolled off the top/left edge -> not visible.
 		if pos.right() <= ox || pos.bottom() <= oy {
 			return None;
 		}
+		// canvas coords -> screen: subtract the pan, add the area origin.
 		pos.x = pos.x.saturating_sub(ox).saturating_add(area.x);
 		pos.y = pos.y.saturating_sub(oy).saturating_add(area.y);
+
 		// clip to area; if no overlap, not visible.
 		let clipped = pos.intersection(area);
 		if clipped.width == 0 || clipped.height == 0 {
@@ -1488,46 +1688,24 @@ impl<'a> ratatui::widgets::StatefulWidget for NodeGraph<'a> {
 	type State = crate::FlowState;
 
 	fn render(self, area: Rect, buf: &mut Buffer, state: &mut Self::State) {
-		// DEFAULT SAFE-NET (highest priority): a freshly-defaulted FlowState
-		// (offset (0,0), no selection, no hover) must render byte-for-byte
-		// identically to the legacy stateless render. Delegating straight to
-		// `render_to` guarantees absolute zero change in that case — no blit,
-		// no highlight overlay, nothing that could perturb a single cell.
-		let is_default = state.view_offset == (0, 0)
-			&& state.selection.is_none()
-			&& state.hover.is_none();
-		if is_default {
-			self.render_to(area, buf);
-			return;
-		}
+		// Borders/ports/connections: always blit the visible window of the
+		// off-screen canvas (rendered once during `calculate` in canvas-absolute
+		// coordinates). Using the canvas at every offset — including (0,0) —
+		// keeps panning continuous (no jump between "not panned" and "panned")
+		// and matches the canvas-absolute content rects from `split_stateful`,
+		// so a node's border and its content rect always line up. The canvas
+		// holds borders/ports/connections only (no content), so caller-rendered
+		// content shows through the blank cells. Call `calculate` first; before
+		// it runs the canvas is blank and nothing is drawn.
+		blit_canvas(&self.canvas, area, buf, state.view_offset);
 
-		// Non-default state.
-		//
-		// 1) Borders/ports/connections: if the view is panned, blit the visible
-		//    window of the off-screen canvas onto `area` (the canvas was already
-		//    rendered during `calculate`). At offset (0,0) this would be
-		//    equivalent to `render_to`, but we blit anyway so the highlight
-		//    overlay below operates on the same canvas-sourced cells regardless
-		//    of pan. Blitting a (0,0) offset produces the same output as
-		//    `render_to` would, so there's no divergence for the no-pan case.
-		if state.view_offset == (0, 0) {
-			// No pan: render the source directly (identical to the default
-			// path's paint, minus the default short-circuit). This keeps the
-			// no-pan highlight case byte-identical to render_to as a base.
-			self.render_to(area, buf);
-		} else {
-			// Panned: blit the scrolled window from the canvas. The canvas
-			// holds borders/ports/connections only (no content), so caller-
-			// rendered content shows through the blank cells.
-			blit_canvas(&self.canvas, area, buf, state.view_offset);
-		}
-
-		// 2) Selection / hover highlight overlay: recolor the border cells of
-		//    the targeted node(s). We use `highlight_border` which preserves
-		//    each cell's symbol (so the port glyphs ├/┬/etc. on the border
-		//    survive — only their fg/modifier changes). Hover is drawn first so
-		//    that a node that is both hovered and selected shows the selection
-		//    (selection wins, drawn second).
+		// Selection / hover highlight overlay: recolor the border cells of the
+		// targeted node(s). `highlight_border` preserves each cell's symbol (so
+		// the port glyphs ├/┬/etc. survive — only fg/modifier changes). Hover is
+		// drawn first, then selection, so a node that is both shows the
+		// selection. `node_screen_rect` mirrors the placement into the same
+		// canvas-absolute space the blit drew, so the highlight lands on the
+		// actual border at any pan offset.
 		let hover_style = self.highlight_style.add_modifier(Modifier::DIM);
 		if let Some(hover_id) = state.hover
 			&& let Some(rect) = self.node_screen_rect(hover_id, area, state.view_offset)

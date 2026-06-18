@@ -820,27 +820,96 @@ fn stateful_default_renders_identically_to_stateless() {
 	);
 }
 
-/// Selection highlight: a node in `FlowState::selection` must have at least one
-/// border cell whose style differs from the un-highlighted render. This proves
-/// the highlight overlay actually recolors the border.
+/// Selection highlight: a node in `FlowState::selection` must have its OWN
+/// border recolored (not merely "some cell somewhere changed"). We render with
+/// and without selection, then assert a border cell of the SELECTED node carries
+/// the highlight fg (Yellow, the default) in the selected render and NOT in the
+/// plain render. This is stricter than "≥1 cell differs": it pins the highlight
+/// to the right node's border, which the earlier area-relative mis-mirror broke
+/// (the highlight landed on empty canvas, so it recolored the wrong cells).
 #[test]
 fn stateful_selection_recolors_node_border() {
-	let area = Rect::new(0, 0, 40, 15);
+	use ratatui::style::Color;
+	// area == canvas (60x20): every node is on-screen at offset (0,0) under the
+	// canvas-absolute model, so node 0's border is actually blitted into `area`.
+	let canvas = Rect::new(0, 0, 60, 20);
+	let target = nid(0); // root
+
+	// selected node's on-screen content rect → border cell = inner top-left - 1.
+	let inner = viewport_chain_graph()
+		.split_stateful(canvas, &FlowState::new().select(Some(target)))
+		.into_iter()
+		.find(|(id, _)| *id == target)
+		.map(|(_, r)| r)
+		.expect("target placed");
+	assert!(inner.width > 0 && inner.height > 0, "target on-screen");
+	let (bx, by) = (inner.x.saturating_sub(1), inner.y.saturating_sub(1));
 
 	// baseline: default (no highlight)
-	let mut buf_plain = Buffer::empty(area);
+	let mut buf_plain = Buffer::empty(canvas);
 	let mut s_plain = FlowState::default();
-	viewport_chain_graph().render(area, &mut buf_plain, &mut s_plain);
+	viewport_chain_graph().render(canvas, &mut buf_plain, &mut s_plain);
 
-	// with selection on node 0 (root, guaranteed placed & on-screen)
-	let mut buf_sel = Buffer::empty(area);
-	let mut s_sel = FlowState::default().select(Some(nid(0)));
-	viewport_chain_graph().render(area, &mut buf_sel, &mut s_sel);
+	// with selection on node 0
+	let mut buf_sel = Buffer::empty(canvas);
+	let mut s_sel = FlowState::default().select(Some(target));
+	viewport_chain_graph().render(canvas, &mut buf_sel, &mut s_sel);
 
-	// at least one cell must differ (the recolored border)
-	let differ =
-		buf_plain.content().iter().zip(buf_sel.content().iter()).any(|(a, b)| a != b);
-	assert!(differ, "selecting a node must change at least one border cell's style");
+	let plain = buf_plain.cell(Position::new(bx, by)).expect("border cell");
+	let sel = buf_sel.cell(Position::new(bx, by)).expect("border cell");
+	assert_ne!(
+		plain.style().fg,
+		Some(Color::Yellow),
+		"plain render: selected node's border must NOT be yellow yet"
+	);
+	assert_eq!(
+		sel.style().fg,
+		Some(Color::Yellow),
+		"selected render: the SELECTED node's border must be highlighted yellow \
+		 (highlight was mis-positioned for Rtl/Btt before the canvas-absolute fix)"
+	);
+}
+
+/// Panning from offset (0,0) to (1,0) must shift a visible node's border by
+/// exactly one cell — smooth, no jump. Previously offset (0,0) rendered via
+/// `render_to` (mirroring about the *view* width) while any non-zero pan blitted
+/// the canvas (mirroring about the *canvas* width); when the view was narrower
+/// than the canvas, the first pan step leapt. Now every offset blits the canvas,
+/// so the border slides one cell per pan step. We mark node 2's border via
+/// selection (Yellow) and compare its leftmost cell across the two offsets.
+#[test]
+fn stateful_pan_is_continuous_at_offset_zero() {
+	use ratatui::style::Color;
+	// view (40 wide) narrower than canvas (60 wide); node 2 sits at canvas
+	// x≈20, so it stays visible at both offset 0 and 1.
+	let view = Rect::new(0, 0, 40, 15);
+	let target = nid(2);
+
+	let leftmost_yellow = |ox: u16| -> Option<u16> {
+		let mut buf = Buffer::empty(view);
+		let mut s = FlowState::default().select(Some(target)).view_offset(ox, 0);
+		viewport_chain_graph().render(view, &mut buf, &mut s);
+		let mut min: Option<u16> = None;
+		for y in 0..view.height {
+			for x in 0..view.width {
+				let is_yellow = buf
+					.cell(Position::new(x, y))
+					.map(|c| c.style().fg == Some(Color::Yellow))
+					.unwrap_or(false);
+				if is_yellow {
+					min = Some(min.map_or(x, |m| m.min(x)));
+				}
+			}
+		}
+		min
+	};
+
+	let x0 = leftmost_yellow(0).expect("node 2 border visible at offset (0,0)");
+	let x1 = leftmost_yellow(1).expect("node 2 border visible at offset (1,0)");
+	assert_eq!(
+		x0, x1 + 1,
+		"panning one cell must shift the border exactly one cell (smooth pan, no jump)"
+	);
 }
 
 // --- legacy (deprecated) path, kept working ------------------------------
