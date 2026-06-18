@@ -80,6 +80,8 @@ f.render_stateful_widget(graph, area, &mut ());
 cargo run --example viewport   # interactive: 16-node graph + keyboard scrolling
 cargo run --example content    # 6-node pipeline, content-aware sizing
 cargo run --example export     # non-interactive: export the graph as ASCII text
+cargo run --example manual_layout  # Manual mode: place nodes via explicit set_position
+cargo run --example pinned_layout  # Pinned mode: pin some nodes, auto-layout the rest
 cargo run --example basic      # minimal
 cargo run --example tiny       # renders into a buffer and prints
 ```

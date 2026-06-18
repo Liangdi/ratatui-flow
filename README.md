@@ -73,6 +73,8 @@ f.render_stateful_widget(graph, area, &mut ());
 cargo run --example viewport   # 交互式：16 节点图 + 键盘滚动视口
 cargo run --example content    # 6 节点流水线，内容自适应尺寸
 cargo run --example export     # 非交互：把图导出为 ASCII 文本
+cargo run --example manual_layout  # Manual 模式：显式 set_position 手动摆放节点
+cargo run --example pinned_layout  # Pinned 模式：钉死部分节点，其余自动避让布局
 cargo run --example basic      # 最小示例
 cargo run --example tiny       # 渲染到缓冲区并打印
 ```
