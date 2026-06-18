@@ -2,10 +2,51 @@ use ratatui::{
 	style::Style,
 	widgets::{Block, BorderType, Borders},
 };
+use std::borrow::Cow;
 use std::collections::HashMap as Map;
 use unicode_width::UnicodeWidthStr;
 
 use crate::id::PortId;
+
+/// String-like input accepted by [`NodeLayout`] builders.
+///
+/// This is the moral equivalent of `Into<Cow<'a, str>>`, but additionally
+/// covers `&&str` — which `Into<Cow<'a, str>>` does not — so that existing call
+/// sites passing `slice.iter()` items (e.g. `for t in TITLES.iter()`) keep
+/// compiling unchanged. Implemented for:
+///
+/// - `&'a str`  → stored as `Cow::Borrowed` (zero-cost; the common case).
+/// - `String`  → stored as `Cow::Owned` (the new capability: no `Box::leak`).
+/// - `&&'a str` → dereferenced and borrowed (covers `.iter()` over `&[&str]`).
+/// - `Box<str>` → stored as `Cow::Owned`.
+pub trait IntoNodeStr<'a> {
+	/// Consume `self` into a [`Cow<'a, str>`].
+	fn into_node_str(self) -> Cow<'a, str>;
+}
+
+impl<'a> IntoNodeStr<'a> for &'a str {
+	fn into_node_str(self) -> Cow<'a, str> {
+		Cow::Borrowed(self)
+	}
+}
+
+impl<'a> IntoNodeStr<'a> for String {
+	fn into_node_str(self) -> Cow<'a, str> {
+		Cow::Owned(self)
+	}
+}
+
+impl<'a> IntoNodeStr<'a> for &&'a str {
+	fn into_node_str(self) -> Cow<'a, str> {
+		Cow::Borrowed(*self)
+	}
+}
+
+impl<'a> IntoNodeStr<'a> for Box<str> {
+	fn into_node_str(self) -> Cow<'a, str> {
+		Cow::Owned(self.into_string())
+	}
+}
 
 /// Render information for a single node.
 ///
@@ -23,12 +64,12 @@ use crate::id::PortId;
 pub struct NodeLayout<'a> {
 	pub size: (u16, u16),
 	border_type: BorderType,
-	title: &'a str,
+	title: Cow<'a, str>,
 	border_style: Style,
 	/// Optional display names keyed by [`PortId`]. Drawn one cell inside the
 	/// node from the port symbol (Step 9). Defaults to empty — no names → no
 	/// rendering change.
-	port_names: Map<PortId, &'a str>,
+	port_names: Map<PortId, Cow<'a, str>>,
 }
 
 impl<'a> NodeLayout<'a> {
@@ -36,7 +77,7 @@ impl<'a> NodeLayout<'a> {
 		Self {
 			size,
 			border_type: BorderType::Plain,
-			title: "",
+			title: Cow::Borrowed(""),
 			border_style: Style::default(),
 			port_names: Map::new(),
 		}
@@ -60,13 +101,13 @@ impl<'a> NodeLayout<'a> {
 		Self::new((inner_w.saturating_add(2) as u16, inner_h.saturating_add(2) as u16))
 	}
 
-	pub fn with_title(mut self, title: &'a str) -> Self {
-		self.title = title;
+	pub fn with_title(mut self, title: impl IntoNodeStr<'a>) -> Self {
+		self.title = title.into_node_str();
 		self
 	}
 
 	pub fn title(&self) -> &str {
-		self.title
+		&self.title
 	}
 
 	pub fn with_border_type(mut self, border: BorderType) -> Self {
@@ -102,8 +143,8 @@ impl<'a> NodeLayout<'a> {
 	/// left/top side) or `from_port` (out port, drawn on the right/bottom side)
 	/// depending on which connection references it.
 	#[must_use]
-	pub fn with_port_name(mut self, port: PortId, name: &'a str) -> Self {
-		self.port_names.insert(port, name);
+	pub fn with_port_name(mut self, port: PortId, name: impl IntoNodeStr<'a>) -> Self {
+		self.port_names.insert(port, name.into_node_str());
 		self
 	}
 
@@ -111,7 +152,7 @@ impl<'a> NodeLayout<'a> {
 	/// [`with_port_name`][Self::with_port_name]). `None` for ports with no name
 	/// (the default).
 	pub fn port_name(&self, port: PortId) -> Option<&str> {
-		self.port_names.get(&port).copied()
+		self.port_names.get(&port).map(|c| c.as_ref())
 	}
 
 	pub fn block(&self) -> Block<'_> {
@@ -119,7 +160,7 @@ impl<'a> NodeLayout<'a> {
 			.borders(Borders::ALL)
 			.border_type(self.border_type)
 			.border_style(self.border_style)
-			.title(self.title)
+			.title(self.title.as_ref())
 	}
 }
 
@@ -226,5 +267,42 @@ mod tests {
 		let cloned = node.clone();
 		assert_eq!(cloned.port_name(PortId(0)), Some("in"));
 		assert_eq!(cloned.port_name(PortId(1)), Some("out"));
+	}
+
+	#[test]
+	fn title_from_owned_string() {
+		// A runtime-built String is moved in and owned via Cow::Owned — no leak
+		// needed by the caller.
+		let node = NodeLayout::new((6, 4)).with_title(String::from("dynamic"));
+		assert_eq!(node.title(), "dynamic");
+	}
+
+	#[test]
+	fn title_from_static_str_still_works() {
+		// Existing &'static str callers keep compiling unchanged.
+		let node = NodeLayout::new((6, 4)).with_title("static");
+		assert_eq!(node.title(), "static");
+	}
+
+	#[test]
+	fn port_name_from_owned_string() {
+		// Owned port names also work, mirroring with_title.
+		let node = NodeLayout::new((6, 4)).with_port_name(PortId(0), String::from("in"));
+		assert_eq!(node.port_name(PortId(0)), Some("in"));
+	}
+
+	#[test]
+	fn clone_preserves_owned_strings() {
+		// Cloning a node that owns its strings must still read them back —
+		// proves Cow::Owned clones correctly (deep copy of the allocation).
+		let node = NodeLayout::new((6, 4))
+			.with_title(String::from("owned-title"))
+			.with_port_name(PortId(0), String::from("owned-port"));
+		let cloned = node.clone();
+		assert_eq!(cloned.title(), "owned-title");
+		assert_eq!(cloned.port_name(PortId(0)), Some("owned-port"));
+		// Original is untouched by the clone.
+		assert_eq!(node.title(), "owned-title");
+		assert_eq!(node.port_name(PortId(0)), Some("owned-port"));
 	}
 }
