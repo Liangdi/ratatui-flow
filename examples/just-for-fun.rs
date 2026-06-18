@@ -22,6 +22,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// create app and run it
 	let app = App::new();
 	terminal.draw(|f| ui(f, &app))?;
+	print!("\r\n");
 
 	Ok(())
 }
@@ -74,7 +75,7 @@ fn ui(f: &mut Frame, _app: &App) {
 			ea_zone.height as usize,
 		);
 		minigraph.calculate();
-		f.render_stateful_widget(minigraph, ea_zone, &mut ());
+		f.render_stateful_widget(minigraph, ea_zone, &mut FlowState::default());
 	}
-	f.render_stateful_widget(graph, space, &mut ());
+	f.render_stateful_widget(graph, space, &mut FlowState::default());
 }
