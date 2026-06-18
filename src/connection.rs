@@ -565,7 +565,8 @@ impl<'a> ConnectionsLayout<'a> {
 						ea_conn.1,
 					);
 					let new_cost = current_cost.saturating_add(cc);
-					if self.came_from[ea_edge].is_none() || new_cost < self.cost[ea_edge] {
+					if self.came_from[ea_edge].is_none() || new_cost < self.cost[ea_edge]
+					{
 						let prio = (-new_cost, -Self::heuristic(ea_nei.0, goal.0));
 						if new_cost != isize::MAX {
 							frontier.push((prio, ea_nei));

@@ -364,11 +364,14 @@ impl<'a> NodeGraph<'a> {
 			roots.remove(&ea_connection.from_node);
 		}
 
-		// place them and their children (recursively)
+		// place them and their children (recursively). Precompute the upstream
+		// adjacency once (O(connections)) so place_node/nudge don't each re-scan
+		// + re-sort the whole connection list per node.
+		let upstream = build_upstream_index(&valid_conns);
 		let mut main_chain = Vec::new();
 		let mut visited = Set::new();
 		for ea_root in roots {
-			self.place_node(ea_root, 0, 0, &mut main_chain, &mut visited, &valid_conns);
+			self.place_node(ea_root, 0, 0, &mut main_chain, &mut visited, &upstream);
 			assert!(main_chain.is_empty());
 		}
 
@@ -523,7 +526,7 @@ impl<'a> NodeGraph<'a> {
 		y: u16,
 		main_chain: &mut Vec<NodeId>,
 		visited: &mut Set<NodeId>,
-		conns: &[Connection<'a>],
+		upstream: &UpstreamIndex<'a>,
 	) {
 		// cycle guard: if this node was already placed (reachable again through
 		// a cycle), don't re-place or recurse. this is what prevents stack
@@ -580,14 +583,14 @@ impl<'a> NodeGraph<'a> {
 		let cur_main = if horiz { rect_me.x } else { rect_me.y };
 		let main_extent = if horiz { rect_me.width } else { rect_me.height };
 		main_chain.push(idx_node);
-		for ea_child in get_upstream(conns, idx_node) {
+		for ea_child in upstream.of(idx_node) {
 			if self.placements.contains_key(&ea_child.from_node) {
 				// nudge it (if necessary). a fresh in_progress set per top-level
 				// nudge tracks the recursion stack to break cycles without
 				// blocking legitimate re-nudges. pass the new main-axis coordinate.
 				let mut in_progress = Set::new();
 				let new_main = cur_main + main_extent + MARGIN;
-				self.nudge(ea_child.from_node, new_main, &mut in_progress, conns);
+				self.nudge(ea_child.from_node, new_main, &mut in_progress, upstream);
 			} else {
 				// place it. child advances along the main axis; siblings stack
 				// along the cross axis. place_node takes (x, y) where for
@@ -595,7 +598,14 @@ impl<'a> NodeGraph<'a> {
 				let child_main = cur_main + main_extent + MARGIN;
 				let (px, py) =
 					if horiz { (child_main, cross) } else { (cross, child_main) };
-				self.place_node(ea_child.from_node, px, py, main_chain, visited, conns);
+				self.place_node(
+					ea_child.from_node,
+					px,
+					py,
+					main_chain,
+					visited,
+					upstream,
+				);
 				main_chain.clear();
 				// child may not have been placed (e.g. it's part of a cycle);
 				// only advance the cross axis if it actually got a rect.
@@ -619,7 +629,7 @@ impl<'a> NodeGraph<'a> {
 		idx_node: NodeId,
 		main: u16,
 		in_progress: &mut Set<NodeId>,
-		conns: &[Connection<'a>],
+		upstream: &UpstreamIndex<'a>,
 	) {
 		// cycle guard: break only if this node is already on the current
 		// recursion stack (i.e. we're inside a cycle). a node legitimately
@@ -638,7 +648,7 @@ impl<'a> NodeGraph<'a> {
 			} else {
 				self.placements.get_mut(&idx_node).unwrap().y = main;
 			}
-			for ea_child in get_upstream(conns, idx_node) {
+			for ea_child in upstream.of(idx_node) {
 				// the child must already be placed for nudging to make sense;
 				// skip defensively if not.
 				if self.placements.contains_key(&ea_child.from_node) {
@@ -646,7 +656,7 @@ impl<'a> NodeGraph<'a> {
 						ea_child.from_node,
 						main + my_extent + MARGIN,
 						in_progress,
-						conns,
+						upstream,
 					);
 				}
 			}
@@ -1079,6 +1089,34 @@ pub(crate) fn blit_canvas(
 			}
 		}
 	}
+}
+
+/// Per-node upstream connection lists (the children feeding INTO each node),
+/// precomputed once from the filtered `valid_conns` and reused across the whole
+/// `place_node` / `nudge` recursion. Replaces the per-call `get_upstream` full
+/// scan + sort (O(connections) each, called once per node).
+///
+/// Ordering matches the old `get_upstream` exactly: sorted by `to_port` with a
+/// stable sort over the connection iteration order.
+struct UpstreamIndex<'a>(Map<NodeId, Vec<Connection<'a>>>);
+
+impl<'a> UpstreamIndex<'a> {
+	/// Connections feeding INTO `node` (`to_node == node`), sorted by `to_port`.
+	/// Empty slice if none — matches `get_upstream`'s empty `Vec`.
+	fn of(&self, node: NodeId) -> &[Connection<'a>] {
+		self.0.get(&node).map(Vec::as_slice).unwrap_or(&[])
+	}
+}
+
+fn build_upstream_index<'a>(conns: &[Connection<'a>]) -> UpstreamIndex<'a> {
+	let mut m: Map<NodeId, Vec<Connection<'a>>> = Map::new();
+	for c in conns {
+		m.entry(c.to_node).or_default().push(*c);
+	}
+	for v in m.values_mut() {
+		v.sort_by_key(|c| c.to_port);
+	}
+	UpstreamIndex(m)
 }
 
 fn get_upstream<'a>(conns: &[Connection<'a>], idx_node: NodeId) -> Vec<Connection<'a>> {
