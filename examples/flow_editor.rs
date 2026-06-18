@@ -12,6 +12,7 @@
 //!     toggle a link from the source (cycles & duplicates are guarded);
 //!   - **r** — rotate the flow direction (Rtl → Ltr → Ttb → Btt);
 //!   - **a** — toggle connection direction arrows;
+//!   - **t** — cycle the sci-fi theme (DeepSpace → Cyberpunk → …);
 //!   - **p** — toggle the side panel; **?** — help; **q / Esc** — quit.
 //!
 //! The graph is the single source of truth: nodes/connections are mutated in
@@ -41,6 +42,7 @@ use ratatui::{
 	widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 use ratatui_flow::*;
+use ratatui_sci_fi::{Palette, Theme};
 
 /// Off-screen canvas size — larger than a typical terminal so panning matters,
 /// but kept modest so the initial pipeline lands inside the default view under
@@ -52,9 +54,9 @@ const STATUS_H: u16 = 2;
 /// Width of the collapsible left side panel.
 const PANEL_W: u16 = 26;
 
-/// Per-connection color palette, cycled in insertion order.
-const EDGE_COLORS: [Color; 6] =
-	[Color::Green, Color::Yellow, Color::Blue, Color::Magenta, Color::Cyan, Color::Red];
+// Node/edge colors are derived from the active sci-fi theme's palette (see
+// `App::pal` / `App::edge_color`), so the whole editor recolors together when
+// the theme is cycled with `t`.
 
 // --- node kinds ---------------------------------------------------------------
 
@@ -76,12 +78,14 @@ impl Kind {
 		}
 	}
 
-	fn color(self) -> Color {
+	/// Theme-aware color for this kind: each kind maps to a semantic palette
+	/// slot, so the whole graph recolors when the theme (`t`) changes.
+	fn color(self, pal: Palette) -> Color {
 		match self {
-			Kind::Source => Color::Cyan,
-			Kind::Process => Color::Blue,
-			Kind::Filter => Color::Magenta,
-			Kind::Sink => Color::Green,
+			Kind::Source => pal.ok.color(),
+			Kind::Process => pal.accent.color(),
+			Kind::Filter => pal.warn.color(),
+			Kind::Sink => pal.accent2.color(),
 		}
 	}
 
@@ -132,6 +136,8 @@ struct App {
 	drag: Option<DragState>,
 	/// Source node of the in-progress link (CONNECT mode).
 	connect_from: Option<NodeId>,
+	/// Active sci-fi theme (cycle with `t`); drives every color below.
+	theme: Theme,
 	direction: FlowDirection,
 	show_arrows: bool,
 	show_panel: bool,
@@ -145,14 +151,16 @@ struct App {
 
 impl App {
 	fn new() -> Self {
-		// Selection highlight: bold magenta (hover gets +DIM from the framework).
-		// Pinned mode: freshly added nodes auto-layout, but any node the user
-		// drags (via `set_position` below) is treated as an immovable anchor and
-		// keeps its place across `calculate()`.
+		// Selection highlight: bold theme accent (hover gets +DIM from the
+		// framework). Pinned mode: freshly added nodes auto-layout, but any node
+		// the user drags (via `set_position` below) is treated as an immovable
+		// anchor and keeps its place across `calculate()`.
+		let theme = Theme::DeepSpace;
+		let pal = theme.palette();
 		let graph = NodeGraph::new(vec![], vec![], CANVAS_W as usize, CANVAS_H as usize)
 			.with_layout_mode(LayoutMode::Pinned)
 			.highlight_style(
-				Style::default().add_modifier(Modifier::BOLD).fg(Color::Magenta),
+				Style::default().add_modifier(Modifier::BOLD).fg(pal.accent.color()),
 			);
 		let mut app = Self {
 			graph,
@@ -161,6 +169,7 @@ impl App {
 			mode: Mode::Normal,
 			drag: None,
 			connect_from: None,
+			theme,
 			direction: FlowDirection::Rtl,
 			show_arrows: false,
 			show_panel: true,
@@ -207,7 +216,8 @@ impl App {
 		let size = fit_size(&body);
 		let layout = NodeLayout::new(size)
 			.with_title(leak(title.clone()))
-			.with_border_type(BorderType::Rounded);
+			.with_border_type(BorderType::Rounded)
+			.with_border_style(Style::default().fg(kind.color(self.pal())));
 		let id = self.graph.add_node(layout);
 		self.info.insert(id, NodeInfo { id, kind, title, body });
 		id
@@ -250,7 +260,7 @@ impl App {
 
 	/// Append a colored connection `from` → `to` (port 0 on both ends).
 	fn link_color(&mut self, from: NodeId, to: NodeId) {
-		let color = EDGE_COLORS[self.graph.connections().len() % EDGE_COLORS.len()];
+		let color = self.edge_color(self.graph.connections().len());
 		let style = Style::default().fg(color);
 		self.graph.add_connection(
 			Connection::new(from, 0usize.into(), to, 0usize.into())
@@ -351,6 +361,29 @@ impl App {
 		self.flash(if self.show_arrows { "arrows on" } else { "arrows off" });
 	}
 
+	/// Active theme's palette — the single source of color for the editor.
+	fn pal(&self) -> Palette {
+		self.theme.palette()
+	}
+
+	/// Edge color for the `idx`-th connection (insertion order), cycled through
+	/// palette slots so connections recolor with the theme.
+	fn edge_color(&self, idx: usize) -> Color {
+		let p = self.pal();
+		[p.accent, p.accent2, p.ok, p.warn, p.alert, p.muted][idx % 6].color()
+	}
+
+	fn rotate_theme(&mut self) {
+		self.theme = next_theme(self.theme);
+		let accent = self.pal().accent.color();
+		// The framework applies `highlight_style` for selection/hover at render
+		// time, so this takes effect next frame (no `calculate` needed).
+		self.graph.set_highlight_style(
+			Style::default().add_modifier(Modifier::BOLD).fg(accent),
+		);
+		self.flash(format!("theme: {:?}", self.theme));
+	}
+
 	fn flash(&mut self, msg: impl Into<String>) {
 		self.message = msg.into();
 		self.msg_at = Instant::now();
@@ -404,6 +437,7 @@ impl App {
 			}
 			KeyCode::Char('r') => self.rotate_direction(),
 			KeyCode::Char('a') => self.toggle_arrows(),
+			KeyCode::Char('t') => self.rotate_theme(),
 			KeyCode::Char('n') | KeyCode::Char('2') => {
 				self.do_add(Kind::Process);
 				self.bring_selection_into_view(view);
@@ -564,6 +598,9 @@ fn ui(f: &mut Frame, app: &mut App) {
 		app.graph.calculate();
 	}
 	let area = f.area();
+	// Base: fill the whole frame with the theme background so the active
+	// theme's color shows through the graph's blank canvas cells.
+	f.buffer_mut().set_style(area, Style::default().bg(app.pal().bg.color()));
 	let view = graph_area(app.show_panel, area);
 	if app.show_panel {
 		let panel = Rect {
@@ -577,11 +614,12 @@ fn ui(f: &mut Frame, app: &mut App) {
 	draw_graph(f, app, view);
 	draw_status(f, app, area);
 	if app.show_help {
-		draw_help(f, area);
+		draw_help(f, app, area);
 	}
 }
 
 fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
+	let pal = app.pal();
 	// 1. node content via the pan-aware content rects.
 	let zones = app.graph.split_stateful(area, &app.state);
 	for (id, rect) in &zones {
@@ -591,7 +629,9 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
 		{
 			f.render_widget(
 				Paragraph::new(info.body.as_str()).style(
-					Style::default().fg(info.kind.color()).add_modifier(Modifier::BOLD),
+					Style::default()
+						.fg(info.kind.color(pal))
+						.add_modifier(Modifier::BOLD),
 				),
 				*rect,
 			);
@@ -610,7 +650,7 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
 		for (id, rect) in &zones {
 			if *id == src && rect.width > 0 && rect.height > 0 {
 				let style =
-					Style::default().fg(Color::Green).add_modifier(Modifier::BOLD);
+					Style::default().fg(pal.ok.color()).add_modifier(Modifier::BOLD);
 				paint_border(f.buffer_mut(), *rect, style);
 				break;
 			}
@@ -619,10 +659,15 @@ fn draw_graph(f: &mut Frame, app: &mut App, area: Rect) {
 }
 
 fn draw_panel(f: &mut Frame, app: &App, area: Rect) {
+	let pal = app.pal();
 	let block = Block::default()
 		.borders(Borders::ALL)
-		.border_style(Style::default().fg(Color::DarkGray))
-		.title(" graph ");
+		.border_style(Style::default().fg(pal.muted.color()))
+		.style(Style::default().bg(pal.panel.color()))
+		.title(" graph ")
+		.title_style(
+			Style::default().fg(pal.accent.color()).add_modifier(Modifier::BOLD),
+		);
 	let inner = block.inner(area);
 	f.render_widget(block, area);
 	if inner.width < 4 {
@@ -648,10 +693,11 @@ fn draw_panel(f: &mut Frame, app: &App, area: Rect) {
 		s.push_str(&format!("{marker}{tag:<4} {}\n", truncate(title, cap)));
 	}
 
-	f.render_widget(Paragraph::new(s).style(Style::default().fg(Color::Gray)), inner);
+	f.render_widget(Paragraph::new(s).style(Style::default().fg(pal.fg.color())), inner);
 }
 
 fn draw_status(f: &mut Frame, app: &App, area: Rect) {
+	let pal = app.pal();
 	let top = Rect {
 		x: area.x,
 		y: area.bottom().saturating_sub(STATUS_H),
@@ -691,14 +737,15 @@ fn draw_status(f: &mut Frame, app: &App, area: Rect) {
 	);
 
 	let hints = "? help · n/2 proc · 1 src · 3 filt · 4 sink · d del · c link · \
-	             tab cycle · r rotate · a arrows · p panel · hjkl/wheel pan · q quit";
+	             tab cycle · r rotate · a arrows · t theme · p panel · hjkl/wheel pan · q quit";
 	f.render_widget(
-		Paragraph::new(hints).style(Style::default().fg(Color::DarkGray)),
+		Paragraph::new(hints).style(Style::default().fg(pal.muted.color())),
 		bottom,
 	);
 }
 
-fn draw_help(f: &mut Frame, area: Rect) {
+fn draw_help(f: &mut Frame, app: &App, area: Rect) {
+	let pal = app.pal();
 	const W: u16 = 48;
 	const H: u16 = 20;
 	let x = area.x + (area.width.saturating_sub(W)) / 2;
@@ -721,6 +768,7 @@ Flow editor — ratatui-flow
   Enter           confirm link (CONNECT)
   r               rotate flow direction
   a               toggle direction arrows
+  t               cycle sci-fi theme
   p               toggle side panel
   Home            reset view
   q  /  Esc       quit
@@ -728,10 +776,12 @@ Flow editor — ratatui-flow
 	let block = Block::default()
 		.borders(Borders::ALL)
 		.border_type(BorderType::Rounded)
-		.border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+		.border_style(
+			Style::default().fg(pal.accent.color()).add_modifier(Modifier::BOLD),
+		)
 		.title(" help — ? or Esc to close ");
 	f.render_widget(
-		Paragraph::new(text).style(Style::default().fg(Color::Gray)),
+		Paragraph::new(text).style(Style::default().fg(pal.fg.color())),
 		block.inner(r),
 	);
 	f.render_widget(block, r);
@@ -813,6 +863,21 @@ fn next_dir(d: FlowDirection) -> FlowDirection {
 		D::Ltr => D::Ttb,
 		D::Ttb => D::Btt,
 		D::Btt => D::Rtl,
+	}
+}
+
+/// Cycle through the eight built-in sci-fi themes.
+fn next_theme(t: Theme) -> Theme {
+	use Theme as T;
+	match t {
+		T::Cyberpunk => T::Fallout,
+		T::Fallout => T::Weyland,
+		T::Weyland => T::DeepSpace,
+		T::DeepSpace => T::Bloodmoon,
+		T::Bloodmoon => T::Nebula,
+		T::Nebula => T::Arctic,
+		T::Arctic => T::Sentinel,
+		T::Sentinel => T::Cyberpunk,
 	}
 }
 
@@ -898,8 +963,10 @@ mod tests {
 	}
 
 	#[test]
-	fn selection_highlight_paints_border_magenta() {
+	fn selection_highlight_paints_border_in_theme_accent() {
 		let mut app = App::new();
+		// The selection highlight is the active theme's accent color.
+		let accent = app.pal().accent.color();
 		// area == canvas: every node is on-screen at offset (0,0).
 		let area = Rect::new(0, 0, CANVAS_W, CANVAS_H);
 		let target = nid(0); // src
@@ -931,18 +998,18 @@ mod tests {
 				|| (y == border.y || y == border.bottom() - 1)
 					&& (x >= border.x && x < border.right())
 		};
-		let magenta_on_border = (0..area.height)
+		let accent_on_border = (0..area.height)
 			.flat_map(|y| (0..area.width).map(move |x| (x, y)))
 			.filter(|(x, y)| {
 				buf.cell(Position::new(*x, *y))
-					.map(|c| c.style().fg == Some(Color::Magenta))
+					.map(|c| c.style().fg == Some(accent))
 					.unwrap_or(false)
 			})
 			.filter(|(x, y)| on_border(*x, *y))
 			.count();
 		assert!(
-			magenta_on_border > 0,
-			"no magenta cells on the selected node's border (got 0); \
+			accent_on_border > 0,
+			"no accent cells on the selected node's border (got 0); \
 			 highlight is mis-positioned"
 		);
 	}

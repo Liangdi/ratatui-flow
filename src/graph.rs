@@ -247,6 +247,16 @@ impl<'a> NodeGraph<'a> {
 		this
 	}
 
+	/// Mutator counterpart of [`highlight_style`][Self::highlight_style]: set
+	/// the selection/hover highlight on an existing graph. Unlike
+	/// [`set_direction`][Self::set_direction] this does **not** mark the graph
+	/// dirty — the highlight is applied as a per-frame border recolor during
+	/// render (not baked into the off-screen canvas), so it takes effect on the
+	/// very next draw without a [`calculate`][Self::calculate].
+	pub fn set_highlight_style(&mut self, style: Style) {
+		self.highlight_style = style;
+	}
+
 	/// Toggle drawing a **direction arrow** on each connection's `to` (in) port,
 	/// pointing in the flow direction (e.g. `◄` for `Rtl`, `▶` for `Ltr`, `▼`
 	/// for `Ttb`). **Off by default** — pass `true` to replace the in-port
