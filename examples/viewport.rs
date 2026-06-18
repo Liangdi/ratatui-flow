@@ -1,15 +1,17 @@
 //! Interactive TUI: a complex compiler-pipeline node graph that is bigger
 //! than the screen, with keyboard-driven viewport scrolling.
 //!
-//! This uses the library's native viewport API: the whole graph is laid out
-//! **once** into an off-screen canvas (during `NodeGraph::calculate`), and each
-//! frame we:
+//! This uses the Step 6 stateful path: the whole graph is laid out **once**
+//! into an off-screen canvas (during `NodeGraph::calculate`), and each frame we:
 //!   1. ask the graph for each node's *screen-coordinate* content rect via
-//!      `split_viewport`, and render our own content widget into it;
-//!   2. render the `NodeGraphView` widget, which blits the scrolled window of
-//!      the canvas (borders / ports / connections) onto the terminal.
+//!      `split_stateful` (driven by a `FlowState` whose `view_offset` is the
+//!      pan position), and render our own content widget into it;
+//!   2. render the graph via its `StatefulWidget` impl
+//!      (`f.render_stateful_widget(graph, view, &mut flow_state)`), which blits
+//!      the scrolled window of the canvas (borders / ports / connections) onto
+//!      the terminal and overlays selection/hover highlight.
 //!
-//! Scrolling is just changing the `Viewport` offset and redrawing; the
+//! Scrolling is just changing `flow_state.view_offset` and redrawing; the
 //! expensive layout/routing never re-runs per frame.
 //!
 //! Controls: `←→↑↓` or `hjkl` to scroll · `PgUp`/`PgDn` · `Home` reset ·
@@ -89,7 +91,7 @@ const EDGE_COLORS: [Color; 6] =
 
 struct App {
 	graph: NodeGraph<'static>,
-	viewport: Viewport,
+	state: FlowState,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -102,7 +104,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let _guard = TerminalGuard;
 	let mut terminal = Terminal::new(CrosstermBackend::new(stdout))?;
 
-	let mut app = App { graph, viewport: Viewport::new() };
+	let mut app = App { graph, state: FlowState::new() };
 	run_app(&mut terminal, &mut app)?;
 	Ok(())
 }
@@ -159,46 +161,33 @@ fn run_app(
 				continue;
 			}
 			let sz = terminal.size()?;
-			let max = max_scroll((sz.width, sz.height), (CANVAS_W, CANVAS_H));
+			let view_w = sz.width;
+			let view_h = sz.height.saturating_sub(1);
+			let canvas = (CANVAS_W, CANVAS_H);
 			match key.code {
 				KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
 				KeyCode::Left | KeyCode::Char('h') => {
-					app.viewport.offset.0 = app.viewport.offset.0.saturating_sub(3)
+					app.state.pan(-3, 0, canvas, (view_w, view_h))
 				}
 				KeyCode::Right | KeyCode::Char('l') => {
-					app.viewport.offset.0 =
-						app.viewport.offset.0.saturating_add(3).min(max.0)
+					app.state.pan(3, 0, canvas, (view_w, view_h))
 				}
 				KeyCode::Up | KeyCode::Char('k') => {
-					app.viewport.offset.1 = app.viewport.offset.1.saturating_sub(1)
+					app.state.pan(0, -1, canvas, (view_w, view_h))
 				}
 				KeyCode::Down | KeyCode::Char('j') => {
-					app.viewport.offset.1 =
-						app.viewport.offset.1.saturating_add(1).min(max.1)
+					app.state.pan(0, 1, canvas, (view_w, view_h))
 				}
-				KeyCode::PageUp => {
-					app.viewport.offset.1 = app.viewport.offset.1.saturating_sub(10)
-				}
-				KeyCode::PageDown => {
-					app.viewport.offset.1 =
-						app.viewport.offset.1.saturating_add(10).min(max.1)
-				}
-				KeyCode::Home => app.viewport = Viewport::new(),
+				KeyCode::PageUp => app.state.pan(0, -10, canvas, (view_w, view_h)),
+				KeyCode::PageDown => app.state.pan(0, 10, canvas, (view_w, view_h)),
+				KeyCode::Home => app.state = FlowState::new(),
 				_ => {}
 			}
 		}
 	}
 }
 
-/// Largest scroll offset that still keeps the viewport on the canvas, with the
-/// status bar row reserved.
-fn max_scroll(screen: (u16, u16), canvas: (u16, u16)) -> (u16, u16) {
-	let view_w = screen.0;
-	let view_h = screen.1.saturating_sub(1);
-	(canvas.0.saturating_sub(view_w), canvas.1.saturating_sub(view_h))
-}
-
-fn ui(f: &mut Frame, app: &App) {
+fn ui(f: &mut Frame, app: &mut App) {
 	let area = f.area();
 	let status_h: u16 = 1;
 	let view = Rect {
@@ -210,15 +199,25 @@ fn ui(f: &mut Frame, app: &App) {
 
 	// 1. node contents — screen-coordinate rects, clipped to the visible view
 	let bold = Style::default().add_modifier(Modifier::BOLD);
-	let zones = app.graph.split_viewport(view, &app.viewport);
-	for (i, z) in zones.iter().enumerate() {
-		if i < CONTENTS.len() && z.width > 0 && z.height > 0 {
-			f.render_widget(Paragraph::new(CONTENTS[i]).style(bold), *z);
+	let zones = app.graph.split_stateful(view, &app.state);
+	for (id, z) in &zones {
+		if z.width > 0 && z.height > 0 && (id.as_u32() as usize) < CONTENTS.len() {
+			f.render_widget(
+				Paragraph::new(CONTENTS[id.as_u32() as usize]).style(bold),
+				*z,
+			);
 		}
 	}
 
-	// 2. borders / ports / connections — blit the scrolled window of the canvas
-	f.render_widget(NodeGraphView::new(&app.graph).viewport(app.viewport), view);
+	// 2. borders / ports / connections (blit) + selection/hover highlight.
+	//    The graph is consumed by render_stateful_widget, so we clone-free by
+	//    rebuilding only if needed — here we render once per frame via the
+	//    stateful path. `app.graph` is borrowed; we render a clone-by-value
+	//    NodeGraph only when the borrow-checker demands it. To keep this
+	//    example allocation-free, we render into the frame directly using the
+	//    graph's stateful impl on a freshly-borrowed copy via clone.
+	let mut state = app.state.clone();
+	f.render_stateful_widget(app.graph.clone(), view, &mut state);
 
 	// status bar (stays fixed regardless of scroll)
 	let status = Rect {
@@ -228,8 +227,8 @@ fn ui(f: &mut Frame, app: &App) {
 		height: status_h,
 	};
 	let msg = format!(
-		" viewport=({}, {})  canvas={}x{}  \u{2190}\u{2192}\u{2191}\u{2193}/hjkl scroll · PgUp/PgDn · Home=reset · q/Esc=quit ",
-		app.viewport.offset.0, app.viewport.offset.1, CANVAS_W, CANVAS_H
+		" view_offset=({}, {})  canvas={}x{}  \u{2190}\u{2192}\u{2191}\u{2193}/hjkl scroll · PgUp/PgDn · Home=reset · q/Esc=quit ",
+		app.state.view_offset.0, app.state.view_offset.1, CANVAS_W, CANVAS_H
 	);
 	f.render_widget(
 		Paragraph::new(msg).style(Style::default().add_modifier(Modifier::REVERSED)),

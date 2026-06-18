@@ -1,7 +1,7 @@
 use ratatui::{
 	buffer::Buffer,
 	layout::{Position, Rect},
-	style::Style,
+	style::{Color, Style},
 	symbols::line,
 	widgets::BorderType,
 };
@@ -96,16 +96,17 @@ impl std::fmt::Debug for Direction {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Connection {
+pub struct Connection<'a> {
 	pub(crate) from_node: NodeId,
 	pub(crate) from_port: PortId,
 	pub(crate) to_node: NodeId,
 	pub(crate) to_port: PortId,
 	line_type: LineType,
 	line_style: Style,
+	label: Option<&'a str>,
 }
 
-impl Connection {
+impl<'a> Connection<'a> {
 	pub fn new(
 		from_node: NodeId,
 		from_port: PortId,
@@ -119,6 +120,7 @@ impl Connection {
 			to_port,
 			line_type: LineType::Rounded,
 			line_style: Style::default(),
+			label: None,
 		}
 	}
 
@@ -155,6 +157,34 @@ impl Connection {
 	pub fn line_style(&self) -> Style {
 		self.line_style
 	}
+
+	/// Attach a **label** to this connection, rendered horizontally at the
+	/// midpoint of the routed path on top of the line (with a solid background
+	/// so the line stays readable under the text).
+	///
+	/// Labels are purely opt-in: a connection built without `with_label` has
+	/// `label == None` and renders identically to a label-less graph.
+	///
+	/// The label is borrowed for the connection's lifetime `'a`, so `Connection`
+	/// stays `Copy` and can be used exactly as before (`add_connection`,
+	/// `.copied()`, etc.). Passing a `&'static str` is the common case.
+	///
+	/// The label text is truncated on screen to fit (see [`label`]); in
+	/// vertical layouts (`Ttb`/`Btt`) it is still written horizontally (the
+	/// terminal cannot rotate text), which may overlap neighbouring nodes —
+	/// this is an accepted visual compromise.
+	///
+	/// [`label`]: Self::label
+	#[must_use]
+	pub fn with_label(mut self, label: &'a str) -> Self {
+		self.label = Some(label);
+		self
+	}
+
+	/// The label attached via [`with_label`], or `None` (the default).
+	pub fn label(&self) -> Option<&str> {
+		self.label
+	}
 }
 
 /// Layout/routing problems detected during [`NodeGraph::calculate`][crate::NodeGraph::calculate] that would
@@ -185,43 +215,141 @@ pub enum Diagnostic {
 	},
 }
 
-/// Generate the correct connection symbol for this node
+/// Generate the correct connection symbol for this node.
+///
+/// `is_input` selects the in-port (┤) vs out-port (├) variant. `vertical`
+/// switches between horizontal-edge ports (drawn on the left/right border, the
+/// original `Ltr`/`Rtl` behavior) and vertical-edge ports (drawn on the
+/// top/bottom border for `Ttb`/`Btt`).
 pub(crate) fn conn_symbol(
 	is_input: bool,
 	block_style: BorderType,
 	conn_style: LineType,
+	vertical: bool,
 ) -> &'static str {
-	let out = match (block_style, conn_style) {
-		(BorderType::Plain | BorderType::Rounded, LineType::Thick) => ("┥", "┝"),
-		(BorderType::Plain | BorderType::Rounded, LineType::Double) => ("╡", "╞"),
-		(
-			BorderType::Plain | BorderType::Rounded,
-			LineType::Plain | LineType::Rounded,
-		) => ("┤", "├"),
+	// Each entry is (input_symbol, output_symbol). For horizontal ports the
+	// input is on the left edge (┤ family) and output on the right (├ family);
+	// for vertical ports input is on the top edge (┴ family) and output on the
+	// bottom (┬ family).
+	let out = if !vertical {
+		match (block_style, conn_style) {
+			(BorderType::Plain | BorderType::Rounded, LineType::Thick) => ("┥", "┝"),
+			(BorderType::Plain | BorderType::Rounded, LineType::Double) => ("╡", "╞"),
+			(
+				BorderType::Plain | BorderType::Rounded,
+				LineType::Plain | LineType::Rounded,
+			) => ("┤", "├"),
 
-		(BorderType::Thick, LineType::Thick) => ("┫", "┣"),
-		(BorderType::Thick, LineType::Double) => ("╡", "╞"), // fallback
-		(BorderType::Thick, LineType::Plain | LineType::Rounded) => ("┨", "┠"),
+			(BorderType::Thick, LineType::Thick) => ("┫", "┣"),
+			(BorderType::Thick, LineType::Double) => ("╡", "╞"), // fallback
+			(BorderType::Thick, LineType::Plain | LineType::Rounded) => ("┨", "┠"),
 
-		(BorderType::Double, LineType::Thick) => ("╢", "╟"), // fallback
-		(BorderType::Double, LineType::Double) => ("╣", "╠"),
-		(BorderType::Double, LineType::Plain | LineType::Rounded) => ("╢", "╟"),
+			(BorderType::Double, LineType::Thick) => ("╢", "╟"), // fallback
+			(BorderType::Double, LineType::Double) => ("╣", "╠"),
+			(BorderType::Double, LineType::Plain | LineType::Rounded) => ("╢", "╟"),
 
-		(
-			BorderType::LightDoubleDashed
-			| BorderType::LightTripleDashed
-			| BorderType::LightQuadrupleDashed,
-			_,
-		) => ("┤", "├"),
-		(
-			BorderType::HeavyDoubleDashed
-			| BorderType::HeavyTripleDashed
-			| BorderType::HeavyQuadrupleDashed,
-			_,
-		) => ("┤", "├"),
-		(BorderType::QuadrantInside | BorderType::QuadrantOutside, _) => ("┤", "├"),
+			(
+				BorderType::LightDoubleDashed
+				| BorderType::LightTripleDashed
+				| BorderType::LightQuadrupleDashed,
+				_,
+			) => ("┤", "├"),
+			(
+				BorderType::HeavyDoubleDashed
+				| BorderType::HeavyTripleDashed
+				| BorderType::HeavyQuadrupleDashed,
+				_,
+			) => ("┤", "├"),
+			(BorderType::QuadrantInside | BorderType::QuadrantOutside, _) => ("┤", "├"),
+		}
+	} else {
+		// vertical-edge ports: ┴ (input/top) and ┬ (output/bottom) families.
+		match (block_style, conn_style) {
+			(BorderType::Plain | BorderType::Rounded, LineType::Thick) => ("┻", "┳"),
+			(BorderType::Plain | BorderType::Rounded, LineType::Double) => ("╨", "╥"),
+			(
+				BorderType::Plain | BorderType::Rounded,
+				LineType::Plain | LineType::Rounded,
+			) => ("┴", "┬"),
+
+			(BorderType::Thick, LineType::Thick) => ("┻", "┳"),
+			(BorderType::Thick, LineType::Double) => ("╨", "╥"), // fallback
+			(BorderType::Thick, LineType::Plain | LineType::Rounded) => ("┴", "┬"),
+
+			(BorderType::Double, LineType::Thick) => ("╨", "╥"), // fallback
+			(BorderType::Double, LineType::Double) => ("╩", "╦"),
+			(BorderType::Double, LineType::Plain | LineType::Rounded) => ("╨", "╥"),
+
+			(
+				BorderType::LightDoubleDashed
+				| BorderType::LightTripleDashed
+				| BorderType::LightQuadrupleDashed,
+				_,
+			) => ("┴", "┬"),
+			(
+				BorderType::HeavyDoubleDashed
+				| BorderType::HeavyTripleDashed
+				| BorderType::HeavyQuadrupleDashed,
+				_,
+			) => ("┴", "┬"),
+			(BorderType::QuadrantInside | BorderType::QuadrantOutside, _) => ("┴", "┬"),
+		}
 	};
 	if is_input { out.0 } else { out.1 }
+}
+
+/// The direction-arrow symbol drawn on a connection's `to` port (the in port,
+/// where the line enters the node), pointing in the direction of flow — i.e.
+/// *into* the `to` node, the way the data/contribution flows. The variant
+/// scales with `line_type`: heavy line types (`Thick`/`Double`) use the solid
+/// heavy arrows (`◀▶▼▲`); light types (`Plain`/`Rounded`) use the thin arrows
+/// (`◄►▽△`).
+///
+/// This **replaces** the in-port connection glyph (`┤`/`┴` family) when
+/// [`NodeGraph::show_arrows`][crate::NodeGraph] is enabled (the default), so
+/// the flow direction is visible at a glance. The out port (`from_node` side)
+/// keeps its `├`/`┬` family glyph regardless.
+///
+/// Direction → pointing:
+/// - `Rtl` (flow right→left): points left `◄`/`◀`
+/// - `Ltr` (flow left→right): points right `►`/`▶`
+/// - `Ttb` (flow top→bottom): points down `▼`/`▽`
+/// - `Btt` (flow bottom→top): points up `▲`/`△`
+pub(crate) fn arrow_symbol(
+	direction: crate::FlowDirection,
+	line_type: LineType,
+) -> &'static str {
+	let heavy = matches!(line_type, LineType::Thick | LineType::Double);
+	match direction {
+		crate::FlowDirection::Rtl => {
+			if heavy {
+				"◀"
+			} else {
+				"◄"
+			}
+		}
+		crate::FlowDirection::Ltr => {
+			if heavy {
+				"▶"
+			} else {
+				"►"
+			}
+		}
+		crate::FlowDirection::Ttb => {
+			if heavy {
+				"▼"
+			} else {
+				"▽"
+			}
+		}
+		crate::FlowDirection::Btt => {
+			if heavy {
+				"▲"
+			} else {
+				"△"
+			}
+		}
+	}
 }
 
 pub(crate) const ALIAS_CHARS: [&str; 24] = [
@@ -239,22 +367,35 @@ pub(crate) enum Edge {
 const E: Edge = Edge::Empty;
 const B: Edge = Edge::Blocked;
 
-#[derive(Debug)]
-pub(crate) struct ConnectionsLayout {
+#[derive(Debug, Clone)]
+pub(crate) struct ConnectionsLayout<'a> {
 	ports: Map<(bool, NodeId, PortId), (usize, usize)>, // (x,y)
-	connections: Vec<(Connection, usize)>,              // ((from, to), class)
+	connections: Vec<(Connection<'a>, usize)>,          // ((from, to), class)
 	edge_field: Betweens<Edge>,
 	width: usize,
 	height: usize,
 	pub(crate) alias_connections: Map<(bool, NodeId, PortId), &'static str>,
 	line_types: Map<usize, LineType>,
 	line_styles: Map<usize, Style>,
+	/// Per-class label text (only connections that called `with_label`). Filled
+	/// during [`push_connection`][Self::push_connection]; read during
+	/// [`calculate`][Self::calculate] to decide which classes record a midpoint
+	/// and during [`render`][Self::render] to draw the text.
+	label_texts: Map<usize, &'a str>,
+	/// Per-class connection midpoint in canvas coordinates, captured during the
+	/// second-pass backtrace in [`calculate`][Self::calculate]. Only populated
+	/// for classes that appear in [`label_texts`][Self::label_texts] (i.e. have
+	/// a label). An absent entry means "no label → render nothing".
+	///
+	/// TODO: when two connections' midpoints coincide their labels overwrite
+	/// each other. Stacking/offsetting is out of scope for Step 8.
+	labels: Map<usize, (usize, usize)>,
 	/// Routing failures detected during [`calculate`][Self::calculate], drained
 	/// into `NodeGraph::diagnostics` by the caller.
 	pub(crate) diagnostics: Vec<Diagnostic>,
 }
 
-impl ConnectionsLayout {
+impl<'a> ConnectionsLayout<'a> {
 	pub(crate) fn new(width: usize, height: usize) -> Self {
 		Self {
 			ports: Map::new(),
@@ -265,11 +406,23 @@ impl ConnectionsLayout {
 			alias_connections: Map::new(),
 			line_types: Map::new(),
 			line_styles: Map::new(),
+			label_texts: Map::new(),
+			labels: Map::new(),
 			diagnostics: Vec::new(),
 		}
 	}
 
-	pub(crate) fn push_connection(&mut self, connection: (Connection, usize)) {
+	pub(crate) fn push_connection(&mut self, connection: (Connection<'a>, usize)) {
+		// Record the label text (if any) for this class so that `calculate`
+		// knows to capture a midpoint and `render` knows to draw it. The label
+		// is borrowed for lifetime 'a (the NodeGraph's lifetime), which is
+		// independent of the `connection` tuple itself — so we can read it
+		// before moving the tuple.
+		let label: Option<&'a str> = connection.0.label;
+		let class = connection.1;
+		if let Some(label) = label {
+			self.label_texts.insert(class, label);
+		}
 		self.connections.push(connection)
 	}
 
@@ -304,28 +457,37 @@ impl ConnectionsLayout {
 		}
 	}
 
-	pub(crate) fn block_port(&mut self, coord: (usize, usize)) {
-		// Guard: North/South index vertical[coord.1][coord.0] and
-		// vertical[coord.1+1][coord.0], both requiring coord.0<width && coord.1<height.
+	/// Block the edges that cross the port's flow axis so routed connections
+	/// don't zig-zag through a port. For **horizontal** ports (the connection
+	/// runs along x) we block the vertical (North/South) edges; for **vertical**
+	/// ports (connection runs along y) we block the horizontal (East/West) edges.
+	pub(crate) fn block_port(&mut self, coord: (usize, usize), vertical: bool) {
+		// Guard: edges index into grids sized width×(height+1) or
+		// (width+1)×height; both need coord.0<width && coord.1<height.
 		if coord.0 >= self.width || coord.1 >= self.height {
 			return;
 		}
-		self.edge_field[(coord, Direction::North).into()] = Edge::Blocked;
-		self.edge_field[(coord, Direction::South).into()] = Edge::Blocked;
+		if vertical {
+			self.edge_field[(coord, Direction::East).into()] = Edge::Blocked;
+			self.edge_field[(coord, Direction::West).into()] = Edge::Blocked;
+		} else {
+			self.edge_field[(coord, Direction::North).into()] = Edge::Blocked;
+			self.edge_field[(coord, Direction::South).into()] = Edge::Blocked;
+		}
 	}
 
-	pub(crate) fn calculate(&mut self) {
+	pub(crate) fn calculate(&mut self, direction: crate::FlowDirection) {
 		let mut idx_next_alias = 0;
 		'outer: for ea_conn in &self.connections {
 			self.line_types.insert(ea_conn.1, ea_conn.0.line_type());
 			self.line_styles.insert(ea_conn.1, ea_conn.0.line_style());
 			let start = (
 				self.ports[&(false, ea_conn.0.from_node, ea_conn.0.from_port)],
-				Direction::West,
+				direction.main_out_direction(),
 			);
 			let goal = (
 				self.ports[&(true, ea_conn.0.to_node, ea_conn.0.to_port)],
-				Direction::East,
+				direction.main_in_direction(),
 			);
 			if start.0.0 > self.edge_field.width || start.0.1 > self.edge_field.height {
 				continue;
@@ -429,14 +591,26 @@ impl ConnectionsLayout {
 				}
 			}
 
-			// second pass: draw edges
+			// second pass: collect the path sequence (goal → start), then draw
+			// the edges along it. The sequence also yields the connection's
+			// midpoint (`seq[len/2]`) for label rendering.
+			let mut seq: Vec<(usize, usize)> = Vec::new();
 			let mut next = goal;
 			loop {
 				if next == start {
 					break;
 				}
+				seq.push(next.0);
 				self.edge_field[next.into()] = Edge::Connection(ea_conn.1);
 				next = came_from[next.into()].unwrap();
+			}
+			// Record the midpoint for label rendering, but ONLY when this
+			// connection actually has a label — otherwise the map stays empty
+			// and `render` does no label work (keeping label-less rendering
+			// byte-for-byte identical to pre-Step-8 behavior).
+			if !seq.is_empty() && self.label_texts.contains_key(&ea_conn.1) {
+				let mid = seq[seq.len() / 2];
+				self.labels.insert(ea_conn.1, mid);
 			}
 		}
 	}
@@ -519,6 +693,46 @@ impl ConnectionsLayout {
 				)) {
 					cell.set_symbol(symbol).set_style(line_style);
 				}
+			}
+		}
+
+		// Render labels on top of the lines. This is the ONLY opt-in new paint
+		// added by Step 8: `self.labels` is empty for a label-less graph, so
+		// this loop is a complete no-op and the output above is untouched.
+		for (class, (mx, my)) in &self.labels {
+			let Some(&text) = self.label_texts.get(class) else {
+				continue;
+			};
+			// The label's color: reuse the connection's own line style so the
+			// text inherits its fg. The bg is forced to the canvas default
+			// (Black) so the characters punch a readable hole through the line
+			// underneath instead of blending into it.
+			let base_style = self.line_styles.get(class).copied().unwrap_or_default();
+			let label_style = Style::default()
+				.fg(base_style.fg.unwrap_or(Color::Reset))
+				.bg(Color::Black);
+			// Write the label horizontally from the midpoint, truncating to the
+			// canvas' right edge so we never write out of bounds. Iterate by
+			// grapheme-ish char boundaries: ratatui's `set_symbol` takes a &str,
+			// and each ASCII char of the label maps to one cell.
+			let start_x = *mx as u16 + area.left();
+			let y = *my as u16 + area.top();
+			let max_x = area.left() as usize + self.width;
+			let mut x = start_x;
+			for ch in text.chars() {
+				let cx = x;
+				if (cx as usize) >= max_x {
+					break;
+				}
+				if let Some(cell) = buf.cell_mut(Position::new(cx, y)) {
+					let mut buf_str = [0u8; 4];
+					let s = ch.encode_utf8(&mut buf_str);
+					cell.set_symbol(s).set_style(label_style);
+				}
+				x = match cx.checked_add(1) {
+					Some(v) => v,
+					None => break,
+				};
 			}
 		}
 	}
@@ -649,7 +863,7 @@ impl From<((usize, usize), Direction)> for EdgeIdx {
 }
 
 // the outermost values are unnecessary
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Betweens<T: Default> {
 	horizontal: Vec<Vec<T>>,
 	vertical: Vec<Vec<T>>,

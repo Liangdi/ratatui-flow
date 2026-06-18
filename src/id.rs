@@ -8,11 +8,27 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct NodeId(pub(crate) u32);
 
+impl NodeId {
+	/// The underlying `u32` value of this id. Exposed so callers can map a
+	/// [`NodeId`] back to their own data (e.g. as an index into a content
+	/// array) without keeping a parallel `Map<NodeId, _>`.
+	pub fn as_u32(self) -> u32 {
+		self.0
+	}
+}
+
 /// Stable, opaque identity of a port on a node (input or output).
 ///
 /// Internally a `u32`; see [`NodeId`] for the visibility rationale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PortId(pub(crate) u32);
+
+impl PortId {
+	/// The underlying `u32` value of this id.
+	pub fn as_u32(self) -> u32 {
+		self.0
+	}
+}
 
 impl From<usize> for NodeId {
 	fn from(value: usize) -> Self {

@@ -26,6 +26,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	// create app and run it
 	let app = App::new();
 	terminal.draw(|f| ui(f, &app))?;
+	print!("\r\n");
 
 	Ok(())
 }
@@ -80,5 +81,5 @@ fn ui(f: &mut Frame, _app: &App) {
 	for (idx, ea_zone) in zones.into_iter().enumerate() {
 		f.render_widget(Paragraph::new(format!("{idx}")), ea_zone);
 	}
-	f.render_stateful_widget(graph, space, &mut ());
+	f.render_stateful_widget(graph, space, &mut FlowState::default());
 }
