@@ -866,13 +866,7 @@ struct EdgeIdx {
 	y: usize,
 	is_vertical: bool,
 }
-/*
-impl EdgeIdx {
-	fn pos(self) -> (usize, usize) {
-		(self.0, self.1)
-	}
-}
-*/
+
 impl From<((usize, usize), Direction)> for EdgeIdx {
 	fn from(value: ((usize, usize), Direction)) -> Self {
 		match value.1 {
@@ -888,78 +882,66 @@ impl From<((usize, usize), Direction)> for EdgeIdx {
 	}
 }
 
-// the outermost values are unnecessary
+/// Flat 2D edge grid holding every horizontal and vertical edge of a
+/// `width`×`height` cell canvas in one contiguous `Vec<T>`.
+///
+/// Replaces the old `Vec<Vec<T>>` jagged layout, which performed ~`2*height`
+/// small heap allocations per `Betweens` and scattered rows across the heap.
+/// One allocation + contiguous access improves cache locality for the A*
+/// router's hot loop (`calc_cost` / `came_from` / `cost` lookups) and render.
+///
+/// Layout — horizontal edges first, then vertical:
+/// - horizontal region: `height` rows × `(width+1)` cols → `y*(width+1) + x`
+/// - vertical region:   `(height+1)` rows × `width` cols → `vbase + y*width + x`
+///   where `vbase = height*(width+1)`
+///
+/// The `(width+1)`/`(height+1)` dims line up exactly with [`EdgeIdx`]'s `From`
+/// mapping (South/East add 1 to y/x), so every valid `EdgeIdx` is in bounds.
 #[derive(Debug, Clone)]
-struct Betweens<T: Default> {
-	horizontal: Vec<Vec<T>>,
-	vertical: Vec<Vec<T>>,
+struct Betweens<T> {
+	buf: Vec<T>,
 	width: usize,
 	height: usize,
+	/// Index of the first vertical-edge cell = `height * (width + 1)`.
+	vbase: usize,
 }
-impl<T: Default> Index<EdgeIdx> for Betweens<T> {
+
+impl<T> Betweens<T> {
+	/// Flat buffer index of edge `e`.
+	#[inline]
+	fn idx(&self, e: EdgeIdx) -> usize {
+		if e.is_vertical {
+			self.vbase + e.y * self.width + e.x
+		} else {
+			e.y * (self.width + 1) + e.x
+		}
+	}
+}
+
+impl<T: Clone + Default> Betweens<T> {
+	fn new(width: usize, height: usize) -> Self {
+		let total = height * (width + 1) + (height + 1) * width;
+		Self {
+			buf: vec![T::default(); total],
+			width,
+			height,
+			vbase: height * (width + 1),
+		}
+	}
+}
+
+impl<T> Index<EdgeIdx> for Betweens<T> {
 	type Output = T;
+	#[inline]
 	fn index(&self, index: EdgeIdx) -> &Self::Output {
-		if index.is_vertical {
-			&self.vertical[index.y][index.x]
-		} else {
-			&self.horizontal[index.y][index.x]
-		}
+		&self.buf[self.idx(index)]
 	}
 }
-impl<T: Default> IndexMut<EdgeIdx> for Betweens<T> {
+
+impl<T> IndexMut<EdgeIdx> for Betweens<T> {
+	#[inline]
 	fn index_mut(&mut self, index: EdgeIdx) -> &mut T {
-		if index.is_vertical {
-			&mut self.vertical[index.y][index.x]
-		} else {
-			&mut self.horizontal[index.y][index.x]
-		}
-	}
-}
-
-impl<T: Default> Betweens<T> {
-	fn new(x: usize, y: usize) -> Self {
-		let mut out = Self {
-			horizontal: Vec::new(),
-			vertical: Vec::new(),
-			width: 0,
-			height: 0,
-		};
-		out.set_size(x, y);
-		out
-	}
-
-	fn set_size(&mut self, x: usize, y: usize) {
-		self.horizontal.resize_with(y, || {
-			let mut inner = Vec::new();
-			inner.resize_with(x + 1, Default::default);
-			inner
-		});
-		self.vertical.resize_with(y + 1, || {
-			let mut inner = Vec::new();
-			inner.resize_with(x, Default::default);
-			inner
-		});
-		self.width = x;
-		self.height = y;
-	}
-
-	#[allow(unused)]
-	fn print_with(&self, width: usize, f: impl Fn(&T)) {
-		for y in 0..(self.height + 1) {
-			for x in 0..self.width {
-				print!("{} ", "-".repeat(width));
-				f(&self.vertical[y][x]);
-			}
-			println!("{}", "-".repeat(width));
-			if y < self.height {
-				for x in 0..(self.width + 1) {
-					f(&self.horizontal[y][x]);
-					if x < self.width {
-						print!("{} ", "-".repeat(width));
-					}
-				}
-			}
-			println!();
-		}
+		let i = self.idx(index);
+		&mut self.buf[i]
 	}
 }
